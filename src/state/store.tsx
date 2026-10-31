@@ -1,14 +1,14 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { getService, type TosdrServiceDetail } from '../api/tosdr';
 import type { DirectCheckResult } from '../api/directCheck';
-import { refreshFollowed } from './changeFeed';
+import { refreshFollowed } from '../services/changeFeed';
 import {
   storage,
   type ChangeEntry,
   type FollowedService,
   type ServiceSnapshot,
   type Settings,
-} from './storage';
+} from '../services/storage';
 
 interface StoreValue {
   ready: boolean;
