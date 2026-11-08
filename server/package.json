@@ -1,1 +1,0 @@
-{"dependencies":{},"description":"Chat backend for the ToS;DR Dashboard app: grounded answers from ToS;DR points via the Meta Model API.","devDependencies":{"@types/node":"^20.0.0","typescript":"^5.3.0"},"engines":{"node":">=18"},"main":"dist/server.js","name":"tosdr-dashboard-server","private":true,"scripts":{"build":"tsc","start":"node dist/server.js"},"version":"0.1.0"}
