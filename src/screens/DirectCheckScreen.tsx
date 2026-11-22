@@ -1,14 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import {
-  ActivityIndicator,
-  Linking,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TextInput,
-  TouchableOpacity,
-  View,
-} from 'react-native';
+import { ActivityIndicator, Linking, ScrollView, Text, View } from 'react-native';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { RouteProp } from '@react-navigation/native';
@@ -16,7 +7,10 @@ import type { RootStackParamList } from '../navigation/types';
 import { searchServices, type TosdrSearchService } from '../api/tosdr';
 import { runDirectCheck, type DirectCheckResult } from '../api/directCheck';
 import { useStore, followKey } from '../state/store';
-import { GradeBadge, Note, SectionTitle } from '../components/ui';
+import { Button, ClauseQuote, GradeBadge, Link, Note, SectionTitle, TextField } from '../components/ui';
+import { ServiceLogo } from '../components/ServiceLogo';
+import { tosdrLogoUrl } from '../utils/logos';
+import { makeStyles, radius, space, type, useTheme } from '../theme';
 
 type Nav = NativeStackNavigationProp<RootStackParamList>;
 type Route = RouteProp<RootStackParamList, 'DirectCheck'>;
@@ -33,6 +27,8 @@ export default function DirectCheckScreen(): React.JSX.Element {
   const navigation = useNavigation<Nav>();
   const route = useRoute<Route>();
   const store = useStore();
+  const { c } = useTheme();
+  const styles = useStyles();
   const existing = route.params.directCheckId ? store.directChecks[route.params.directCheckId] : undefined;
 
   const [name, setName] = useState(existing?.name ?? '');
@@ -81,158 +77,204 @@ export default function DirectCheckScreen(): React.JSX.Element {
       serviceId: null,
       name: result.name,
       slug: result.siteUrl.replace(/^https?:\/\//, ''),
-      rating: 'UNRATED',
+      rating: result.rating?.grade ?? 'UNRATED',
       source: 'direct',
       directCheckId: result.id,
     });
   };
 
+  const busy = phase.kind === 'searching' || phase.kind === 'fetching';
+
   const renderResult = (result: DirectCheckResult) => (
     <View>
-      <View style={styles.unratedBanner}>
-        <Text style={styles.unratedText}>Unrated · direct check</Text>
+      <View style={styles.identity}>
+        <ServiceLogo name={result.name} uri={result.iconUrl} size="lg" />
+        <View style={styles.identityText}>
+          <Text style={styles.name} accessibilityRole="header">
+            {result.name}
+          </Text>
+          <Text style={styles.meta}>{result.siteUrl.replace(/^https?:\/\//, '')}</Text>
+        </View>
+        <GradeBadge grade={result.rating && result.rating.grade !== 'N/A' ? result.rating.grade : '?'} large />
       </View>
-      <Text style={styles.resultName}>{result.name}</Text>
       <Text style={styles.resultMeta}>
-        Checked {new Date(result.fetchedAt).toLocaleString()} · {result.fetchedUrls.length} page(s) fetched
+        {`${result.rating ? 'Estimated grade · not reviewed by ToS;DR' : 'Unrated · direct check'} · ${new Date(result.fetchedAt).toLocaleDateString(undefined, {
+          day: 'numeric',
+          month: 'short',
+          year: 'numeric',
+        })} · ${result.fetchedUrls.length} page${result.fetchedUrls.length === 1 ? '' : 's'} read`}
       </Text>
 
-      <SectionTitle>Findings (verbatim quotes)</SectionTitle>
-      {result.findings.length === 0 && (
-        <Note>No findings matched the checked topics in the fetched pages.</Note>
+      {!isFollowingDirect ? (
+        <Button label="Add to your apps" onPress={() => addToMyApps(result)} style={styles.primaryAction} />
+      ) : (
+        <Text style={styles.following}>✓ In your apps</Text>
       )}
-      {result.findings.map((finding, i) => (
-        <View key={`${finding.topic}-${i}`} style={styles.finding}>
-          <Text style={styles.findingTopic}>{finding.topic}</Text>
-          <Text style={styles.quote}>&ldquo;{finding.quote}&rdquo;</Text>
-          <TouchableOpacity onPress={() => void Linking.openURL(finding.sourceUrl)}>
-            <Text style={styles.sourceLink}>{finding.sourceUrl} ↗</Text>
-          </TouchableOpacity>
-        </View>
-      ))}
 
-      {result.notStatedTopics.length > 0 && (
+      {result.rating && (
         <>
-          <SectionTitle>Not stated</SectionTitle>
-          <Text style={styles.notStated}>
-            No matching sentence was found for: {result.notStatedTopics.join(', ')}. That means the fetched pages do not
-            state it — not that the practice does not happen.
+          <SectionTitle>{`ToS;DR cases found (${result.rating.points.length})`}</SectionTitle>
+          <Text style={styles.hint}>
+            {`${result.rating.counts.good} good · ${result.rating.counts.bad} bad · ${result.rating.counts.blocker} blocker · ${result.rating.counts.neutral} neutral. Graded with ToS;DR's formula; neutral cases don't count.`}
           </Text>
+          {result.rating.points.length === 0 && (
+            <Note>No ToS;DR cases could be matched to the pages we read, so there's no grade.</Note>
+          )}
+          {result.rating.points.map((point) => (
+            <ClauseQuote
+              key={point.caseId}
+              classification={point.classification}
+              title={point.caseTitle}
+              body={point.quote}
+              verbatim
+              sourceLabel={point.sourceUrl.replace(/^https?:\/\//, '')}
+              onPressSource={() => void Linking.openURL(point.sourceUrl)}
+            />
+          ))}
+          {result.rating.incomplete && (
+            <Note>The AI service was busy, so some ToS;DR cases weren't checked. Run the check again later for a fuller grade.</Note>
+          )}
+          {result.rating.textTruncated && (
+            <Note>These policies are long, so only the first part of each page was checked. The grade may miss cases.</Note>
+          )}
         </>
       )}
 
-      <SectionTitle>Sources fetched</SectionTitle>
-      {result.fetchedUrls.map((url) => (
-        <TouchableOpacity key={url} onPress={() => void Linking.openURL(url)}>
-          <Text style={styles.sourceLink}>{url} ↗</Text>
-        </TouchableOpacity>
-      ))}
-      {result.failedUrls.length > 0 && (
-        <Text style={styles.failed}>Could not fetch: {result.failedUrls.join(', ')}</Text>
+      {!result.rating && result.ratingError === 'failed' && (
+        <Note>We couldn't estimate a grade this time. The quotes below are still word for word from the pages.</Note>
       )}
 
-      {!isFollowingDirect && (
-        <TouchableOpacity style={styles.addButton} onPress={() => addToMyApps(result)}>
-          <Text style={styles.addButtonText}>+ Add to My Apps</Text>
-        </TouchableOpacity>
+      {!result.rating && <SectionTitle>What the pages say</SectionTitle>}
+      {!result.rating && result.findings.length === 0 && (
+        <Note>None of the checked topics came up in the pages we could read.</Note>
       )}
-      {isFollowingDirect && <Note>This direct check is already in Your Apps.</Note>}
-      <Note>
-        This is not a ToS;DR grade. Direct checks only quote what the service&apos;s own pages say; they never invent a
-        rating.
-      </Note>
+      {!result.rating && result.findings.map((finding, i) => (
+        <ClauseQuote
+          key={`${finding.topic}-${i}`}
+          title={finding.topic}
+          body={finding.quote}
+          verbatim
+          sourceLabel={finding.sourceUrl.replace(/^https?:\/\//, '')}
+          onPressSource={() => void Linking.openURL(finding.sourceUrl)}
+        />
+      ))}
+
+      {!result.rating && result.notStatedTopics.length > 0 && (
+        <>
+          <SectionTitle>Not stated</SectionTitle>
+          <Note>
+            {`Nothing in the pages mentions: ${result.notStatedTopics.join(', ')}. That means the pages don't say, not that it doesn't happen.`}
+          </Note>
+        </>
+      )}
+
+      <SectionTitle>Pages read</SectionTitle>
+      <View style={styles.sources}>
+        {result.fetchedUrls.map((url) => (
+          <Link key={url} label={`${url.replace(/^https?:\/\//, '')} ↗`} onPress={() => void Linking.openURL(url)} />
+        ))}
+      </View>
+      {result.failedUrls.length > 0 && (
+        <Text style={styles.failed}>{`Couldn't read: ${result.failedUrls.map((u) => u.replace(/^https?:\/\//, '')).join(', ')}`}</Text>
+      )}
+
+      {result.rating ? (
+        <Note title="About this grade">
+          {`ToS;DR hasn't reviewed this app. An AI model (${result.rating.model}) matched the company's own pages to ToS;DR's list of cases, and we kept only matches whose quote appears word for word on the page. The letter comes from ToS;DR's grading formula, but ToS;DR's volunteers haven't checked these matches. Information only, not legal advice.`}
+        </Note>
+      ) : (
+        <Note title="About direct checks">
+          This isn't a ToS;DR grade. We only quote the company's own pages, word for word, and never make up a rating.
+          Information only, not legal advice.
+        </Note>
+      )}
     </View>
   );
 
   return (
-    <ScrollView contentContainerStyle={styles.container}>
+    <ScrollView style={styles.screen} contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
       {phase.kind !== 'done' && (
-        <>
-          <Text style={styles.title}>Not rated? Fetch it directly</Text>
-          <Text style={styles.hint}>
-            If ToS;DR does not rate a service yet, this fetches the service&apos;s own terms and privacy pages and extracts
-            findings only from verbatim quotes.
+        <View style={styles.form}>
+          <Text style={styles.title} accessibilityRole="header">
+            Check an app directly
           </Text>
-          <Text style={styles.label}>Service name</Text>
-          <TextInput
-            style={styles.input}
+          <Text style={styles.hint}>
+            If ToS;DR hasn't reviewed an app yet, we read its own privacy and terms pages, match them to ToS;DR's cases,
+            and estimate a grade. Every finding quotes the page word for word.
+          </Text>
+          <Text style={styles.fieldLabel}>App or company name</Text>
+          <TextField
             placeholder="e.g. Arc Browser"
             value={name}
             onChangeText={setName}
             autoCapitalize="none"
+            accessibilityLabel="App or company name"
           />
-          <Text style={styles.label}>Service website (for the direct fetch)</Text>
-          <TextInput
-            style={styles.input}
+          <Text style={styles.fieldLabel}>Website</Text>
+          <TextField
             placeholder="e.g. arc.net"
             value={siteUrl}
             onChangeText={setSiteUrl}
             autoCapitalize="none"
             autoCorrect={false}
+            keyboardType="url"
+            accessibilityLabel="Website"
           />
-          <TouchableOpacity
-            style={styles.addButton}
+          <Button
+            label={phase.kind === 'searching' ? 'Checking ToS;DR…' : phase.kind === 'fetching' ? 'Reading and grading (up to 2 min)…' : 'Check this app'}
             onPress={() => void start()}
-            disabled={phase.kind === 'searching' || phase.kind === 'fetching'}
-          >
-            <Text style={styles.addButtonText}>
-              {phase.kind === 'searching' || phase.kind === 'fetching' ? 'Working…' : 'Check this service'}
-            </Text>
-          </TouchableOpacity>
-          {(phase.kind === 'searching' || phase.kind === 'fetching') && (
-            <ActivityIndicator style={styles.spinner} />
-          )}
-        </>
+            disabled={busy}
+            style={styles.primaryAction}
+          />
+          {busy && <ActivityIndicator style={styles.spinner} color={c.tint} />}
+        </View>
       )}
 
       {phase.kind === 'rated' && (
         <>
-          <SectionTitle>ToS;DR rates this service</SectionTitle>
-          <Text style={styles.hint}>
-            Follow the rated record instead — it carries the community grade and points.
-          </Text>
-          {phase.results.map((service) => {
-            const following = store.isFollowing(service.id);
-            return (
-              <View key={service.id} style={styles.ratedRow}>
-                <GradeBadge grade={service.rating} />
-                <View style={styles.ratedText}>
-                  <Text style={styles.ratedName}>{service.name}</Text>
-                  <Text style={styles.ratedSub}>{service.urls[0] ?? service.slug}</Text>
+          <SectionTitle>ToS;DR already rates this</SectionTitle>
+          <Text style={styles.hint}>Follow the rated version instead. It has a community grade and reviewed points.</Text>
+          <View style={styles.ratedList}>
+            {phase.results.map((service, i) => {
+              const following = store.isFollowing(service.id);
+              return (
+                <View key={service.id} style={[styles.ratedRow, i === phase.results.length - 1 && styles.ratedRowLast]}>
+                  <ServiceLogo name={service.name} uri={tosdrLogoUrl(service.id)} size="sm" />
+                  <View style={styles.identityText}>
+                    <Text style={styles.ratedName} numberOfLines={1}>
+                      {service.name}
+                    </Text>
+                    <Text style={styles.meta} numberOfLines={1}>
+                      {service.urls[0] ?? service.slug}
+                    </Text>
+                  </View>
+                  <GradeBadge grade={service.rating} />
+                  <Button
+                    compact
+                    variant={following ? 'secondary' : 'primary'}
+                    label={following ? '✓ Following' : 'Follow'}
+                    onPress={() => {
+                      if (following) {
+                        store.unfollowService(`tosdr:${service.id}`);
+                      } else {
+                        store.followService({
+                          serviceId: service.id,
+                          name: service.name,
+                          slug: service.slug,
+                          rating: service.rating,
+                          source: 'tosdr',
+                        });
+                      }
+                    }}
+                  />
                 </View>
-                <TouchableOpacity
-                  style={styles.smallButton}
-                  onPress={() => {
-                    if (following) {
-                      store.unfollowService(`tosdr:${service.id}`);
-                    } else {
-                      store.followService({
-                        serviceId: service.id,
-                        name: service.name,
-                        slug: service.slug,
-                        rating: service.rating,
-                        source: 'tosdr',
-                      });
-                    }
-                  }}
-                >
-                  <Text style={styles.smallButtonText}>{following ? 'Following' : 'Follow'}</Text>
-                </TouchableOpacity>
-              </View>
-            );
-          })}
-          <TouchableOpacity
-            style={styles.secondaryButton}
-            onPress={() => setPhase({ kind: 'form' })}
-          >
-            <Text style={styles.secondaryButtonText}>Check a different service</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={styles.secondaryButton}
-            onPress={() => navigation.navigate('Dashboard')}
-          >
-            <Text style={styles.secondaryButtonText}>Back to Your Apps</Text>
-          </TouchableOpacity>
+              );
+            })}
+          </View>
+          <View style={styles.buttonRow}>
+            <Button label="Check a different app" variant="secondary" onPress={() => setPhase({ kind: 'form' })} />
+            <Button label="Back to your apps" variant="quiet" onPress={() => navigation.navigate('Dashboard')} />
+          </View>
         </>
       )}
 
@@ -241,155 +283,111 @@ export default function DirectCheckScreen(): React.JSX.Element {
       {phase.kind === 'error' && (
         <View style={styles.errorBox}>
           <Text style={styles.errorText}>{phase.message}</Text>
-          <TouchableOpacity style={styles.secondaryButton} onPress={() => setPhase({ kind: 'form' })}>
-            <Text style={styles.secondaryButtonText}>Try again</Text>
-          </TouchableOpacity>
+          <Button label="Try again" variant="secondary" onPress={() => setPhase({ kind: 'form' })} />
         </View>
       )}
     </ScrollView>
   );
 }
 
-const styles = StyleSheet.create({
-  addButton: {
-    alignItems: 'center',
-    backgroundColor: '#101828',
-    borderRadius: 10,
-    marginTop: 12,
-    paddingVertical: 12,
-  },
-  addButtonText: {
-    color: '#ffffff',
-    fontSize: 15,
-    fontWeight: '700',
+const useStyles = makeStyles(({ c }) => ({
+  buttonRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: space[2],
+    marginTop: space[4],
   },
   container: {
-    padding: 16,
-    paddingBottom: 32,
+    padding: space[4],
+    paddingBottom: space[8],
   },
   errorBox: {
-    marginTop: 16,
+    gap: space[3],
+    marginTop: space[4],
   },
   errorText: {
-    color: '#dc2626',
-    fontSize: 14,
-    marginBottom: 8,
+    ...type.body,
+    color: c.pointBad,
   },
   failed: {
-    color: '#64748b',
-    fontSize: 12,
-    marginTop: 8,
+    ...type.meta,
+    color: c.inkMuted,
+    marginTop: space[2],
   },
-  finding: {
-    backgroundColor: '#ffffff',
-    borderBottomColor: '#e2e8f0',
-    borderBottomWidth: 1,
-    paddingVertical: 10,
+  fieldLabel: {
+    ...type.bodySmBold,
+    color: c.ink,
+    marginTop: space[3],
   },
-  findingTopic: {
-    fontSize: 13,
-    fontWeight: '800',
+  following: {
+    ...type.bodySmBold,
+    color: c.ink,
+    marginTop: space[4],
+  },
+  form: {
+    gap: space[1],
   },
   hint: {
-    color: '#64748b',
-    fontSize: 13,
-    lineHeight: 19,
-    marginBottom: 12,
+    ...type.bodySm,
+    color: c.inkMuted,
+    marginBottom: space[2],
   },
-  input: {
-    backgroundColor: '#ffffff',
-    borderColor: '#cbd5e1',
-    borderRadius: 10,
-    borderWidth: 1,
-    fontSize: 15,
-    marginBottom: 12,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
+  identity: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: space[3],
   },
-  label: {
-    fontSize: 14,
-    fontWeight: '600',
-    marginBottom: 4,
+  identityText: {
+    flex: 1,
+    gap: 2,
   },
-  notStated: {
-    color: '#475569',
-    fontSize: 13,
-    lineHeight: 19,
+  meta: {
+    ...type.meta,
+    color: c.inkMuted,
   },
-  quote: {
-    color: '#334155',
-    fontSize: 13,
-    fontStyle: 'italic',
-    lineHeight: 19,
-    marginTop: 2,
+  name: {
+    ...type.title,
+    color: c.ink,
+  },
+  primaryAction: {
+    marginTop: space[4],
+  },
+  ratedList: {
+    backgroundColor: c.surface,
+    borderRadius: radius.md,
   },
   ratedName: {
-    fontSize: 15,
-    fontWeight: '600',
+    ...type.headline,
+    color: c.ink,
   },
   ratedRow: {
     alignItems: 'center',
-    backgroundColor: '#ffffff',
-    borderBottomColor: '#e2e8f0',
+    borderBottomColor: c.line,
     borderBottomWidth: 1,
     flexDirection: 'row',
-    paddingVertical: 10,
+    gap: space[3],
+    paddingHorizontal: space[3],
+    paddingVertical: space[3],
   },
-  ratedSub: {
-    color: '#64748b',
-    fontSize: 12,
-  },
-  ratedText: {
-    flex: 1,
-    marginLeft: 10,
+  ratedRowLast: {
+    borderBottomWidth: 0,
   },
   resultMeta: {
-    color: '#64748b',
-    fontSize: 12,
-    marginTop: 2,
+    ...type.meta,
+    color: c.inkMuted,
+    marginTop: space[3],
   },
-  resultName: {
-    fontSize: 20,
-    fontWeight: '800',
+  screen: {
+    backgroundColor: c.ground,
   },
-  secondaryButton: {
-    alignItems: 'center',
-    borderColor: '#101828',
-    borderRadius: 10,
-    borderWidth: 1.5,
-    marginTop: 10,
-    paddingVertical: 10,
-  },
-  secondaryButtonText: {
-    color: '#101828',
-    fontSize: 14,
-    fontWeight: '700',
-  },
-  sourceLink: {
-    color: '#1d4ed8',
-    fontSize: 12,
-    fontWeight: '600',
-    marginTop: 4,
+  sources: {
+    gap: space[2],
   },
   spinner: {
-    marginTop: 12,
+    marginTop: space[3],
   },
   title: {
-    fontSize: 20,
-    fontWeight: '800',
-    marginBottom: 8,
+    ...type.title,
+    color: c.ink,
   },
-  unratedBanner: {
-    alignSelf: 'flex-start',
-    backgroundColor: '#fef3c7',
-    borderRadius: 8,
-    marginBottom: 8,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-  },
-  unratedText: {
-    color: '#92400e',
-    fontSize: 13,
-    fontWeight: '800',
-  },
-});
+}));

@@ -1,15 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import {
-  ActivityIndicator,
-  FlatList,
-  Linking,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TextInput,
-  TouchableOpacity,
-  View,
-} from 'react-native';
+import { ActivityIndicator, FlatList, Linking, Pressable, ScrollView, Text, View } from 'react-native';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { RouteProp } from '@react-navigation/native';
@@ -18,7 +8,8 @@ import { approvedPoints, type TosdrServiceDetail } from '../api/tosdr';
 import { answerQuestion, SUGGESTED_QUESTIONS, type ChatAnswer } from '../services/chat';
 import { askLlmChat, isLlmChatConfigured } from '../services/llmChat';
 import { useStore } from '../state/store';
-import { Chip, Note } from '../components/ui';
+import { Button, Chip, Note, TextField } from '../components/ui';
+import { makeStyles, radius, space, type, useTheme } from '../theme';
 
 type Nav = NativeStackNavigationProp<RootStackParamList>;
 type Route = RouteProp<RootStackParamList, 'Chat'>;
@@ -34,6 +25,8 @@ export default function ChatScreen(): React.JSX.Element {
   const navigation = useNavigation<Nav>();
   const route = useRoute<Route>();
   const store = useStore();
+  const { c } = useTheme();
+  const styles = useStyles();
   const [serviceId, setServiceId] = useState<number | undefined>(route.params.serviceId);
   const [detail, setDetail] = useState<TosdrServiceDetail | null>(null);
   const [loading, setLoading] = useState(false);
@@ -123,98 +116,111 @@ export default function ChatScreen(): React.JSX.Element {
 
   return (
     <View style={styles.container}>
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.picker}>
-        {tosdrFollows.map((follow) => (
-          <Chip
-            key={follow.serviceId}
-            label={follow.name}
-            selected={serviceId === follow.serviceId}
-            onPress={() => {
-              setServiceId(follow.serviceId ?? undefined);
-              setMessages([]);
-            }}
-          />
-        ))}
-      </ScrollView>
+      {tosdrFollows.length > 0 && (
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          style={styles.picker}
+          contentContainerStyle={styles.pickerContent}
+        >
+          {tosdrFollows.map((follow) => (
+            <Chip
+              key={follow.serviceId}
+              label={follow.name}
+              selected={serviceId === follow.serviceId}
+              onPress={() => {
+                setServiceId(follow.serviceId ?? undefined);
+                setMessages([]);
+              }}
+            />
+          ))}
+        </ScrollView>
+      )}
 
       {tosdrFollows.length === 0 ? (
         <View style={styles.empty}>
-          <Text style={styles.emptyText}>Follow a service first.</Text>
-          <Text style={styles.emptySub}>The chat answers from a service&apos;s rated ToS;DR points, so it needs one to talk about.</Text>
-          <TouchableOpacity style={styles.addButton} onPress={() => navigation.navigate('AddApps')}>
-            <Text style={styles.addButtonText}>+ Add apps</Text>
-          </TouchableOpacity>
+          <Text style={styles.emptyTitle}>Follow an app first</Text>
+          <Text style={styles.emptyText}>
+            Answers come from an app's rated ToS;DR points, so pick an app to ask about.
+          </Text>
+          <Button label="Add apps" onPress={() => navigation.navigate('AddApps')} />
         </View>
       ) : loading ? (
         <View style={styles.center}>
-          <ActivityIndicator size="large" />
+          <ActivityIndicator size="large" color={c.tint} />
         </View>
       ) : detail === null ? (
         <View style={styles.center}>
-          <Text style={styles.error}>Could not load this service&apos;s points.</Text>
+          <Text style={styles.error}>Couldn't load this app's points. Check your connection and try again.</Text>
         </View>
       ) : (
         <>
-          <Note>
-            Answers come only from this service&apos;s rated ToS;DR points, quoted below. Information only — not legal advice.
-          </Note>
-          <Text style={styles.modeLine}>
-            {backendConfigured
-              ? 'Chat backend connected — answers are grounded in the rated points.'
-              : 'No chat backend configured — answering on-device from rated points.'}
-          </Text>
-          {fallbackNote !== null && <Text style={styles.fallbackNote}>{fallbackNote}</Text>}
+          <View style={styles.inset}>
+            <Text style={styles.modeLine}>
+              {backendConfigured
+                ? 'Answers are written from the rated points and cite them.'
+                : 'Answers quote the closest rated points, matched on this phone.'}
+            </Text>
+            {fallbackNote !== null && <Text style={styles.fallbackNote}>{fallbackNote}</Text>}
+          </View>
           <FlatList
+            style={styles.messageList}
             data={messages}
             keyExtractor={(item) => item.id}
             contentContainerStyle={styles.messages}
+            ListEmptyComponent={
+              <Note title={`Ask about ${detail.name}`}>
+                Answers come only from its rated ToS;DR points, quoted in full. Information only, not legal advice.
+              </Note>
+            }
             renderItem={({ item }) =>
               item.role === 'user' ? (
                 <View style={styles.userBubble}>
                   <Text style={styles.userText}>{item.text}</Text>
                 </View>
               ) : (
-                <View style={styles.assistantBubble}>
-                  <Text style={styles.assistantText}>{item.text}</Text>
+                <View style={styles.answer}>
+                  <Text style={styles.answerText}>{item.text}</Text>
                   {item.answer?.quotes.map((quote, i) => (
                     <View key={`${quote.pointTitle}-${i}`} style={styles.quote}>
                       <Text style={styles.quoteTitle}>{quote.pointTitle}</Text>
                       <Text style={styles.quoteCase}>{quote.caseTitle}</Text>
                       {quote.analysis !== '' && <Text style={styles.quoteAnalysis}>{quote.analysis}</Text>}
                       {quote.source !== '' && (
-                        <TouchableOpacity onPress={() => void Linking.openURL(quote.source)}>
+                        <Pressable onPress={() => void Linking.openURL(quote.source)} accessibilityRole="link">
                           <Text style={styles.sourceLink}>Source ↗</Text>
-                        </TouchableOpacity>
+                        </Pressable>
                       )}
                     </View>
                   ))}
+                  {!item.text.includes('not legal advice') && (
+                    <Text style={styles.disclaimer}>Information only, not legal advice.</Text>
+                  )}
                 </View>
               )
             }
           />
-          <View style={styles.suggestions}>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            style={styles.suggestions}
+            contentContainerStyle={styles.pickerContent}
+          >
             {SUGGESTED_QUESTIONS.map((q) => (
-              <TouchableOpacity key={q} style={styles.suggestion} onPress={() => void send(q)}>
-                <Text style={styles.suggestionText}>{q}</Text>
-              </TouchableOpacity>
+              <Chip key={q} label={q} selected={false} onPress={() => void send(q)} />
             ))}
-          </View>
+          </ScrollView>
           <View style={styles.inputRow}>
-            <TextInput
+            <TextField
               style={styles.input}
-              placeholder="Ask about this service…"
+              placeholder={`Ask about ${detail.name}`}
               value={question}
               onChangeText={setQuestion}
               onSubmitEditing={() => void send(question)}
               returnKeyType="send"
+              accessibilityLabel="Your question"
             />
-            <TouchableOpacity
-              style={[styles.sendButton, busy ? styles.sendButtonBusy : undefined]}
-              onPress={() => void send(question)}
-              disabled={busy}
-            >
-              <Text style={styles.sendText}>{busy ? '…' : 'Send'}</Text>
-            </TouchableOpacity>
+            <Button label={busy ? 'Asking…' : 'Ask'} onPress={() => void send(question)} disabled={busy} />
           </View>
         </>
       )}
@@ -222,160 +228,130 @@ export default function ChatScreen(): React.JSX.Element {
   );
 }
 
-const styles = StyleSheet.create({
-  addButton: {
-    alignItems: 'center',
-    backgroundColor: '#101828',
-    borderRadius: 10,
-    marginTop: 12,
-    paddingVertical: 12,
-    width: '100%',
-  },
-  addButtonText: {
-    color: '#ffffff',
-    fontSize: 15,
-    fontWeight: '700',
-  },
-  assistantBubble: {
+const useStyles = makeStyles(({ c }) => ({
+  answer: {
     alignSelf: 'stretch',
-    backgroundColor: '#f1f5f9',
-    borderRadius: 12,
-    marginBottom: 10,
-    padding: 12,
+    backgroundColor: c.surface,
+    borderRadius: radius.md,
+    gap: space[2],
+    marginBottom: space[3],
+    padding: space[4],
   },
-  assistantText: {
-    fontSize: 14,
-    lineHeight: 20,
+  answerText: {
+    ...type.body,
+    color: c.ink,
   },
   center: {
     alignItems: 'center',
     flex: 1,
     justifyContent: 'center',
-    padding: 24,
+    padding: space[6],
   },
   container: {
+    backgroundColor: c.ground,
     flex: 1,
-    padding: 16,
+    paddingTop: space[3],
+  },
+  disclaimer: {
+    ...type.meta,
+    color: c.inkMuted,
   },
   empty: {
-    alignItems: 'center',
-    padding: 24,
-  },
-  emptySub: {
-    color: '#64748b',
-    fontSize: 14,
-    lineHeight: 20,
-    marginTop: 6,
-    textAlign: 'center',
+    backgroundColor: c.surfaceSunk,
+    borderRadius: radius.lg,
+    gap: space[3],
+    margin: space[4],
+    padding: space[6],
   },
   emptyText: {
-    fontSize: 18,
-    fontWeight: '700',
+    ...type.body,
+    color: c.inkMuted,
+  },
+  emptyTitle: {
+    ...type.title,
+    color: c.ink,
   },
   error: {
-    color: '#dc2626',
-    fontSize: 14,
+    ...type.body,
+    color: c.ink,
     textAlign: 'center',
   },
+  fallbackNote: {
+    ...type.bodySmBold,
+    color: c.pointBad,
+  },
   input: {
-    backgroundColor: '#ffffff',
-    borderColor: '#cbd5e1',
-    borderRadius: 10,
-    borderWidth: 1,
     flex: 1,
-    fontSize: 15,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
   },
   inputRow: {
+    backgroundColor: c.ground,
+    borderTopColor: c.line,
+    borderTopWidth: 1,
     flexDirection: 'row',
-    marginTop: 8,
+    gap: space[2],
+    padding: space[4],
+  },
+  inset: {
+    paddingHorizontal: space[4],
+    paddingTop: space[2],
+  },
+  messageList: {
+    flex: 1,
   },
   messages: {
-    paddingBottom: 8,
+    padding: space[4],
+  },
+  modeLine: {
+    ...type.meta,
+    color: c.inkMuted,
   },
   picker: {
     flexGrow: 0,
-    marginBottom: 8,
+  },
+  pickerContent: {
+    gap: space[2],
+    paddingHorizontal: space[4],
   },
   quote: {
-    borderTopColor: '#e2e8f0',
-    borderTopWidth: 1,
-    marginTop: 8,
-    paddingTop: 8,
+    backgroundColor: c.surfaceSunk,
+    borderRadius: radius.md,
+    gap: 2,
+    padding: space[3],
   },
   quoteAnalysis: {
-    color: '#475569',
-    fontSize: 12,
-    lineHeight: 17,
-    marginTop: 2,
+    ...type.bodySm,
+    color: c.ink,
   },
   quoteCase: {
-    color: '#64748b',
-    fontSize: 12,
+    ...type.meta,
+    color: c.inkMuted,
   },
   quoteTitle: {
-    fontSize: 13,
-    fontWeight: '700',
-  },
-  sendButton: {
-    backgroundColor: '#101828',
-    borderRadius: 10,
-    justifyContent: 'center',
-    marginLeft: 8,
-    paddingHorizontal: 16,
-  },
-  sendText: {
-    color: '#ffffff',
-    fontWeight: '700',
-  },
-  sendButtonBusy: {
-    opacity: 0.6,
-  },
-  modeLine: {
-    color: '#64748b',
-    fontSize: 12,
-    marginBottom: 4,
-  },
-  fallbackNote: {
-    color: '#b45309',
-    fontSize: 12,
-    marginBottom: 4,
+    ...type.bodySmBold,
+    color: c.ink,
   },
   sourceLink: {
-    color: '#1d4ed8',
-    fontSize: 12,
-    fontWeight: '600',
-    marginTop: 4,
-  },
-  suggestion: {
-    backgroundColor: '#ffffff',
-    borderColor: '#cbd5e1',
-    borderRadius: 16,
-    borderWidth: 1,
-    marginBottom: 6,
-    marginRight: 6,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-  },
-  suggestionText: {
-    fontSize: 12,
+    ...type.meta,
+    color: c.link,
+    marginTop: space[1],
+    textDecorationLine: 'underline',
   },
   suggestions: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    marginTop: 4,
+    flexGrow: 0,
+    paddingBottom: space[2],
   },
   userBubble: {
     alignSelf: 'flex-end',
-    backgroundColor: '#101828',
-    borderRadius: 12,
-    marginBottom: 10,
+    backgroundColor: c.tint,
+    borderRadius: radius.xl,
+    borderBottomRightRadius: radius.sm,
+    marginBottom: space[3],
     maxWidth: '85%',
-    padding: 12,
+    paddingHorizontal: space[4],
+    paddingVertical: space[3],
   },
   userText: {
-    color: '#ffffff',
-    fontSize: 14,
+    ...type.body,
+    color: c.onTint,
   },
-});
+}));

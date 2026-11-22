@@ -1,14 +1,8 @@
 import React, { useEffect, useState } from 'react';
-import {
-  ActivityIndicator,
-  FlatList,
-  StyleSheet,
-  Text,
-  TouchableOpacity,
-  View,
-} from 'react-native';
+import { ActivityIndicator, FlatList, Text, View } from 'react-native';
 import { useStore } from '../state/store';
-import { Note, SectionTitle } from '../components/ui';
+import { Button, Note, SectionTitle, useListItemStyle } from '../components/ui';
+import { makeStyles, radius, space, type, useTheme } from '../theme';
 import type { ChangeEntry } from '../services/storage';
 
 const KIND_LABEL: Record<ChangeEntry['kind'], string> = {
@@ -20,6 +14,9 @@ const KIND_LABEL: Record<ChangeEntry['kind'], string> = {
 
 export default function ChangeFeedScreen(): React.JSX.Element {
   const store = useStore();
+  const { c } = useTheme();
+  const styles = useStyles();
+  const listItemStyle = useListItemStyle();
   const [checking, setChecking] = useState(false);
   const [resultLine, setResultLine] = useState<string | null>(null);
 
@@ -42,36 +39,43 @@ export default function ChangeFeedScreen(): React.JSX.Element {
 
   return (
     <FlatList
+      style={styles.screen}
       data={store.changes}
       keyExtractor={(item) => item.id}
       ListHeaderComponent={
         <View style={styles.header}>
-          <TouchableOpacity style={styles.checkButton} onPress={() => void checkNow()} disabled={checking}>
-            <Text style={styles.checkButtonText}>{checking ? 'Checking…' : 'Check for changes now'}</Text>
-          </TouchableOpacity>
-          {checking && <ActivityIndicator style={styles.spinner} />}
+          <Text style={styles.title} accessibilityRole="header">
+            Changes
+          </Text>
+          <Text style={styles.subtitle}>When ToS;DR updates the grade or points of an app you follow, it shows up here.</Text>
+          <Button
+            label={checking ? 'Checking…' : 'Check for changes now'}
+            onPress={() => void checkNow()}
+            disabled={checking}
+            style={styles.check}
+          />
+          {checking && <ActivityIndicator style={styles.spinner} color={c.tint} />}
           {resultLine !== null && <Text style={styles.resultLine}>{resultLine}</Text>}
-          <Note>
-            This standalone version shows changes in-app only. It does not send push notifications — that needs a
-            backend and APNs/FCM.
-          </Note>
-          <SectionTitle>Changes</SectionTitle>
+          <Note>Changes show up only inside the app. There are no push notifications yet.</Note>
+          {store.changes.length > 0 && <SectionTitle>Latest first</SectionTitle>}
         </View>
       }
       ListEmptyComponent={
         <View style={styles.empty}>
-          <Text style={styles.emptyText}>No changes detected yet.</Text>
-          <Text style={styles.emptySub}>
-            Changes appear here when a followed service&apos;s ToS;DR grade or rated points move.
+          <Text style={styles.emptyTitle}>No changes yet</Text>
+          <Text style={styles.emptyText}>
+            We compare each app you follow with its last check. The first check only records a starting point.
           </Text>
         </View>
       }
-      renderItem={({ item }) => (
-        <View style={styles.row}>
+      renderItem={({ item, index }) => (
+        <View style={[listItemStyle(index, store.changes.length), styles.row]}>
           <Text style={styles.kind}>{KIND_LABEL[item.kind]}</Text>
           <Text style={styles.service}>{item.serviceName}</Text>
           <Text style={styles.summary}>{item.summary}</Text>
-          <Text style={styles.date}>{new Date(item.detectedAt).toLocaleString()}</Text>
+          <Text style={styles.date}>
+            {new Date(item.detectedAt).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })}
+          </Text>
         </View>
       )}
       contentContainerStyle={styles.listContent}
@@ -79,72 +83,74 @@ export default function ChangeFeedScreen(): React.JSX.Element {
   );
 }
 
-const styles = StyleSheet.create({
-  checkButton: {
-    alignItems: 'center',
-    backgroundColor: '#101828',
-    borderRadius: 10,
-    paddingVertical: 12,
-  },
-  checkButtonText: {
-    color: '#ffffff',
-    fontSize: 15,
-    fontWeight: '700',
+const useStyles = makeStyles(({ c }) => ({
+  check: {
+    marginBottom: space[2],
+    marginTop: space[4],
   },
   date: {
-    color: '#94a3b8',
-    fontSize: 12,
-    marginTop: 2,
+    ...type.meta,
+    color: c.inkMuted,
+    marginTop: space[1],
   },
   empty: {
-    alignItems: 'center',
-    padding: 24,
-  },
-  emptySub: {
-    color: '#64748b',
-    fontSize: 14,
-    lineHeight: 20,
-    marginTop: 6,
-    textAlign: 'center',
+    backgroundColor: c.surface,
+    borderRadius: radius.md,
+    gap: space[2],
+    marginHorizontal: space[4],
+    marginTop: space[4],
+    padding: space[6],
   },
   emptyText: {
-    fontSize: 17,
-    fontWeight: '700',
+    ...type.body,
+    color: c.inkMuted,
+  },
+  emptyTitle: {
+    ...type.title,
+    color: c.ink,
   },
   header: {
-    padding: 16,
+    paddingHorizontal: space[4],
+    paddingTop: space[3],
   },
   kind: {
-    fontSize: 12,
-    fontWeight: '800',
-    textTransform: 'uppercase',
+    ...type.label,
+    color: c.inkMuted,
   },
   listContent: {
-    paddingBottom: 24,
+    paddingBottom: space[8],
   },
   resultLine: {
-    color: '#475569',
-    fontSize: 13,
-    marginTop: 8,
+    ...type.bodySmBold,
+    color: c.ink,
+    marginBottom: space[1],
   },
   row: {
-    backgroundColor: '#ffffff',
-    borderBottomColor: '#e2e8f0',
-    borderBottomWidth: 1,
-    paddingHorizontal: 16,
-    paddingVertical: 12,
+    gap: 2,
+    paddingHorizontal: space[4],
+    paddingVertical: space[3],
+  },
+  screen: {
+    backgroundColor: c.ground,
   },
   service: {
-    fontSize: 15,
-    fontWeight: '600',
-    marginTop: 2,
+    ...type.headline,
+    color: c.ink,
   },
   spinner: {
-    marginTop: 12,
+    marginTop: space[2],
+  },
+  subtitle: {
+    ...type.bodySm,
+    color: c.inkMuted,
+    marginTop: space[1],
   },
   summary: {
-    color: '#475569',
-    fontSize: 13,
-    marginTop: 2,
+    ...type.bodySm,
+    color: c.ink,
   },
-});
+  title: {
+    ...type.display,
+    color: c.ink,
+  },
+}));

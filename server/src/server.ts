@@ -2,16 +2,21 @@
 //
 // WHAT IT DOES
 //   POST /chat — takes a question plus a service's already-fetched ToS;DR
-//   points (and optionally public policy text) from the mobile app, asks a
-//   Muse Spark model to answer ONLY from those sources with quoted
+//   points (and optionally public policy text) from the mobile app, asks the
+//   configured model (see modelApi.ts) to answer ONLY from those sources with quoted
 //   citations, and returns the answer plus the citations used.
+//   POST /direct-check/pages — reads a site's privacy/terms pages and
+//   returns their text (see policyPages.ts), plus an estimated ToS;DR-style
+//   grade when a model key is set (see caseRating.ts).
 //   GET /health — liveness check, no key required.
 //
 // HOW TO GET A KEY
-//   1. Open the Meta Model API dashboard (dev.meta.ai) and create an API
-//      key. Copy it immediately — it is shown only once.
+//   1. Default provider is Gemini: create a free key at aistudio.google.com
+//      (leave billing off to stay on the free tier). For Meta, set
+//      MODEL_PROVIDER=meta and use a Meta Model API key instead.
 //   2. Copy server/.env.example to server/.env and put the key there:
 //        MODEL_API_KEY=your-real-key
+//        MODEL_PROVIDER=gemini
 //   3. NEVER commit .env. The repo .gitignore excludes it, and this
 //      server refuses to run without the variable so a missing key fails
 //      loudly instead of silently.
@@ -48,8 +53,10 @@ import * as http from 'node:http';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { buildGroundedPrompt, type PromptPoint } from './prompt';
-import { callMetaChat } from './metaApi';
+import { callModel, resolveProvider } from './modelApi';
+import { rateFromPolicy, type EstimatedRating } from './caseRating';
 import { RateLimiter } from './rateLimit';
+import { readPolicyPages } from './policyPages';
 
 // --- Local .env loading (development convenience only) --------------------
 // Reads server/.env if present. Production hosts must set the variable in
@@ -81,15 +88,18 @@ function loadLocalEnv(): void {
 loadLocalEnv();
 
 const MODEL_API_KEY = process.env.MODEL_API_KEY;
-if (MODEL_API_KEY === undefined || MODEL_API_KEY.trim() === '' || MODEL_API_KEY === 'your-key-here') {
-  console.error(
-    'ERROR: MODEL_API_KEY is not set. Copy server/.env.example to server/.env and add your key, ' +
-      'or set MODEL_API_KEY in the host environment. Refusing to start.',
+// Without a key the server still serves direct checks; only /chat is off.
+const API_KEY: string | null =
+  MODEL_API_KEY === undefined || MODEL_API_KEY.trim() === '' || MODEL_API_KEY === 'your-key-here'
+    ? null
+    : MODEL_API_KEY;
+if (API_KEY === null) {
+  console.warn(
+    'MODEL_API_KEY is not set: /chat is disabled (the app falls back to on-device answers). ' +
+      'Direct checks still work. To enable chat, copy server/.env.example to server/.env and add your key.',
   );
-  process.exit(1);
 }
-const API_KEY: string = MODEL_API_KEY;
-const MODEL = process.env.META_MODEL ?? 'muse-spark-1.3';
+const { provider: PROVIDER, model: MODEL } = resolveProvider(process.env);
 const PORT = Number(process.env.PORT ?? 3001);
 const MAX_BODY_BYTES = 256 * 1024;
 
@@ -186,6 +196,10 @@ function extractCitations(
 }
 
 async function handleChat(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+  if (API_KEY === null) {
+    sendJson(res, 503, { error: 'Chat is not configured on this server.' });
+    return;
+  }
   if (!limiter.allow(clientIp(req))) {
     sendJson(res, 429, { error: 'Rate limit exceeded. Try again in a minute.' });
     return;
@@ -213,7 +227,7 @@ async function handleChat(req: http.IncomingMessage, res: http.ServerResponse): 
 
   let answer: string;
   try {
-    answer = await callMetaChat(API_KEY, MODEL, prompt.system, prompt.user);
+    answer = await callModel(PROVIDER, API_KEY, MODEL, prompt.system, prompt.user);
   } catch (err) {
     console.error('Model call failed:', err instanceof Error ? err.message : err);
     sendJson(res, 502, { error: 'The model service could not be reached. Try again shortly.' });
@@ -227,6 +241,59 @@ async function handleChat(req: http.IncomingMessage, res: http.ServerResponse): 
   sendJson(res, 200, { answer, citations, model: MODEL, disclaimer: DISCLAIMER });
 }
 
+const pageLimiter = new RateLimiter(10, 60_000);
+
+async function handleDirectCheckPages(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+  if (!pageLimiter.allow(clientIp(req))) {
+    sendJson(res, 429, { error: 'Too many checks. Try again in a minute.' });
+    return;
+  }
+  let body: { siteUrl?: unknown; serviceName?: unknown; rate?: unknown };
+  try {
+    body = JSON.parse(await readBody(req)) as { siteUrl?: unknown; serviceName?: unknown; rate?: unknown };
+  } catch {
+    sendJson(res, 400, { error: 'Request body must be valid JSON.' });
+    return;
+  }
+  if (typeof body.siteUrl !== 'string' || body.siteUrl.trim() === '' || body.siteUrl.length > 500) {
+    sendJson(res, 400, { error: 'siteUrl must be a website address.' });
+    return;
+  }
+  try {
+    const result = await readPolicyPages(body.siteUrl);
+    // Estimated ToS;DR-style rating (see caseRating.ts). Needs the model key;
+    // without it the app falls back to its keyword-only quotes.
+    let rating: EstimatedRating | undefined;
+    let ratingError: string | undefined;
+    if (body.rate !== false && result.pages.length > 0) {
+      if (API_KEY === null) {
+        ratingError = 'not-configured';
+      } else {
+        const serviceName =
+          typeof body.serviceName === 'string' && body.serviceName.trim() !== ''
+            ? body.serviceName.trim().slice(0, 100)
+            : result.siteUrl;
+        try {
+          rating = await rateFromPolicy(PROVIDER, API_KEY, MODEL, serviceName, result.pages);
+        } catch (err) {
+          console.error('Rating failed:', err instanceof Error ? err.message : err);
+          ratingError = 'failed';
+        }
+      }
+    }
+    // Cap what goes back to the phone: policy text only, no full HTML dumps.
+    sendJson(res, 200, {
+      ...result,
+      rating,
+      ratingError,
+      pages: result.pages.map((p) => ({ url: p.url, text: p.text.slice(0, 200_000) })),
+      homepageHtml: result.homepageHtml?.slice(0, 300_000),
+    });
+  } catch (err) {
+    sendJson(res, 400, { error: err instanceof Error ? err.message : 'Could not read that site.' });
+  }
+}
+
 const server = http.createServer((req, res) => {
   void (async () => {
     if (req.method === 'OPTIONS') {
@@ -234,7 +301,11 @@ const server = http.createServer((req, res) => {
       return;
     }
     if (req.method === 'GET' && req.url === '/health') {
-      sendJson(res, 200, { ok: true, model: MODEL });
+      sendJson(res, 200, { ok: true, model: API_KEY === null ? null : MODEL, chat: API_KEY !== null });
+      return;
+    }
+    if (req.method === 'POST' && req.url === '/direct-check/pages') {
+      await handleDirectCheckPages(req, res);
       return;
     }
     if (req.method === 'POST' && req.url === '/chat') {
@@ -251,5 +322,5 @@ const server = http.createServer((req, res) => {
 });
 
 server.listen(PORT, () => {
-  console.log(`ToS;DR Dashboard chat backend listening on http://localhost:${PORT} (model: ${MODEL})`);
+  console.log(`ToS;DR Dashboard chat backend listening on http://localhost:${PORT} (model: ${PROVIDER.id}/${MODEL})`);
 });
