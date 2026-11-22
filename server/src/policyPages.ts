@@ -25,7 +25,10 @@
 
 const TIMEOUT_MS = 15000;
 const MAX_PAGES = 4;
-const MIN_TEXT = 400;
+const MIN_TEXT = 400; // wait-for-render threshold
+// A real privacy policy or terms page is longer than this; shorter pages are
+// usually a JavaScript shell (menu + footer only) or a stub.
+const MIN_POLICY_CHARS = 2500;
 const UA = 'Mozilla/5.0 (compatible; ToSDR-Dashboard-DirectCheck/0.2)';
 
 const WELL_KNOWN_PATHS = ['/privacy', '/privacy-policy', '/terms', '/terms-of-service', '/legal/privacy', '/legal/terms'];
@@ -97,8 +100,13 @@ export function htmlToText(html: string): string {
     .trim();
 }
 
-function policyLinksFromHtml(html: string, baseUrl: string): string[] {
-  const out: string[] = [];
+interface LinkRef {
+  url: string;
+  label: string;
+}
+
+function policyLinksFromHtml(html: string, baseUrl: string): LinkRef[] {
+  const out: LinkRef[] = [];
   for (const m of html.matchAll(/<a\b[^>]*href\s*=\s*["']([^"'#]+)["'][^>]*>([\s\S]*?)<\/a>/gi)) {
     const href = m[1];
     const label = htmlToText(m[2]);
@@ -106,12 +114,109 @@ function policyLinksFromHtml(html: string, baseUrl: string): string[] {
       continue;
     }
     try {
-      out.push(new URL(href, baseUrl).toString());
+      out.push({ url: new URL(href, baseUrl).toString(), label });
     } catch {
       // ignore malformed hrefs
     }
   }
   return out;
+}
+
+// --- Choosing which pages to read ------------------------------------------
+//
+// Many links mention "privacy", "terms" or "legal" without being the policy:
+// blog posts, warranty PDFs, transparency reports, comparison pages. Rank
+// candidates so the real privacy policy and terms come first.
+
+type PageKind = 'privacy' | 'terms' | 'cookies' | 'other';
+
+interface Candidate extends LinkRef {
+  kind: PageKind;
+  score: number;
+}
+
+const NOT_POLICY_RE =
+  /blog|news|press|transparency|warrant|\.pdf($|\?)|compare|careers|jobs|\/support|\/help|faq|community|guideline|accessib|trademark|brand|sitemap|dmca|copyright|law-?enforcement|developer|api-terms|partner|seller|merchant|advertis/i;
+
+export function classifyLink(link: LinkRef): Candidate | null {
+  const url = link.url.toLowerCase();
+  const hay = `${url} ${link.label.toLowerCase()}`;
+  let kind: PageKind;
+  let score: number;
+  if (/privacy|datenschutz/.test(hay) && !/choices|do not sell|opt[- ]?out/.test(hay)) {
+    kind = 'privacy';
+    score = /privacy[-_ ]?(policy|notice|statement)|datenschutz/.test(hay) ? 15 : 10;
+  } else if (/terms|conditions|user[-_ ]?agreement/.test(hay)) {
+    kind = 'terms';
+    score = /terms[-_ ]?(of[-_ ]?)?(service|use)|user[-_ ]?agreement/.test(hay) ? 12 : 8;
+  } else if (/cookie/.test(hay)) {
+    kind = 'cookies';
+    score = 4;
+  } else if (/legal/.test(hay)) {
+    kind = 'other';
+    score = 2;
+  } else {
+    return null;
+  }
+  if (NOT_POLICY_RE.test(url)) {
+    score -= 20;
+  }
+  // Deep paths are often regional or product-specific sub-notices.
+  const depth = (url.replace(/^https?:\/\/[^/]+/, '').replace(/\/$/, '').match(/\//g) ?? []).length;
+  score -= Math.max(0, depth - 3);
+  return { ...link, kind, score };
+}
+
+function rankCandidates(links: LinkRef[], siteUrl: string): Candidate[] {
+  const best = new Map<string, Candidate>();
+  for (const link of links) {
+    if (!sameSite(link.url, siteUrl)) {
+      continue;
+    }
+    const c = classifyLink(link);
+    if (!c) {
+      continue;
+    }
+    const key = c.url.replace(/[?#].*$/, '').replace(/\/$/, '').replace(/^https?:\/\/www\./, 'https://');
+    const prev = best.get(key);
+    if (!prev || c.score > prev.score) {
+      best.set(key, c);
+    }
+  }
+  return [...best.values()].sort((a, b) => b.score - a.score);
+}
+
+function looksLikePolicy(text: string): boolean {
+  return (
+    text.length >= MIN_POLICY_CHARS &&
+    /privacy|personal (data|information)|terms|agreement|cookies/i.test(text.slice(0, 6000))
+  );
+}
+
+interface FoundPage extends PolicyPage {
+  kind: PageKind;
+  score: number;
+}
+
+/** Best privacy page, best terms page, then the next best of anything else. */
+function choosePages(found: FoundPage[]): PolicyPage[] {
+  const sorted = [...found].sort((a, b) => b.score - a.score);
+  const chosen: FoundPage[] = [];
+  for (const kind of ['privacy', 'terms'] as const) {
+    const page = sorted.find((p) => p.kind === kind);
+    if (page) {
+      chosen.push(page);
+    }
+  }
+  for (const page of sorted) {
+    if (chosen.length >= MAX_PAGES) {
+      break;
+    }
+    if (!chosen.includes(page) && page.score > 0) {
+      chosen.push(page);
+    }
+  }
+  return chosen.map(({ url, text }) => ({ url, text }));
 }
 
 async function plainFetch(url: string): Promise<{ html: string; finalUrl: string }> {
@@ -140,18 +245,6 @@ function fingerprint(text: string): string {
   return text.replace(/\s+/g, ' ').slice(0, 3000);
 }
 
-function dedupe(urls: string[]): string[] {
-  const seen = new Set<string>();
-  return urls.filter((u) => {
-    const key = u.replace(/\/$/, '').replace(/^https?:\/\/www\./, 'https://');
-    if (seen.has(key)) {
-      return false;
-    }
-    seen.add(key);
-    return true;
-  });
-}
-
 export async function readPolicyPages(siteInput: string): Promise<PolicyPagesResult> {
   const siteUrl = normalizeSite(siteInput);
   const failedUrls: string[] = [];
@@ -167,52 +260,61 @@ export async function readPolicyPages(siteInput: string): Promise<PolicyPagesRes
     failedUrls.push(siteUrl);
   }
 
-  // 2. Candidate policy pages, plain.
-  const discovered = homeHtml ? policyLinksFromHtml(homeHtml, siteUrl).filter((u) => sameSite(u, siteUrl)) : [];
-  const candidates = dedupe([...discovered, ...WELL_KNOWN_PATHS.map((p) => `${siteUrl}${p}`)]).slice(0, 10);
-  const homePrint = fingerprint(homeText);
-  const pages: PolicyPage[] = [];
-  const seenPrints = new Set<string>([homePrint]);
+  // 2. Candidate policy pages, ranked, fetched plain.
+  const discovered = homeHtml ? policyLinksFromHtml(homeHtml, siteUrl) : [];
+  const wellKnown = WELL_KNOWN_PATHS.map((p) => ({ url: `${siteUrl}${p}`, label: '' }));
+  const candidates = rankCandidates([...discovered, ...wellKnown], siteUrl).slice(0, 10);
+  const found: FoundPage[] = [];
+  const seenPrints = new Set<string>([fingerprint(homeText)]);
   await Promise.all(
-    candidates.map(async (url) => {
+    candidates.map(async (c) => {
       try {
-        const { html } = await plainFetch(url);
+        const { html } = await plainFetch(c.url);
         const text = htmlToText(html);
         const print = fingerprint(text);
-        if (text.length < MIN_TEXT || seenPrints.has(print)) {
-          return; // a JS shell or a copy of another page, not a policy page
+        if (!looksLikePolicy(text) || seenPrints.has(print)) {
+          return; // a JS shell, a stub, or a copy of another page
         }
         seenPrints.add(print);
-        pages.push({ url, text });
+        found.push({ url: c.url, text, kind: c.kind, score: c.score });
       } catch {
-        failedUrls.push(url);
+        failedUrls.push(c.url);
       }
     }),
   );
 
-  if (pages.length > 0) {
-    return { siteUrl, pages: pages.slice(0, MAX_PAGES), failedUrls, rendered: false, homepageHtml: homeHtml || undefined };
+  // Done if plain fetching found the privacy policy itself.
+  if (found.some((p) => p.kind === 'privacy')) {
+    return { siteUrl, pages: choosePages(found), failedUrls, rendered: false, homepageHtml: homeHtml || undefined };
   }
 
-  // 3. Nothing real found: render with headless Chrome.
+  // 3. No privacy policy yet (JavaScript-drawn pages): render with headless
+  // Chrome, keeping whatever plain fetching did find.
   const rendered = await renderPolicyPages(siteUrl);
   if (rendered === null) {
     return {
       siteUrl,
-      pages: [],
+      pages: choosePages(found),
       failedUrls,
       rendered: false,
       homepageHtml: homeHtml || undefined,
-      reason: homeHtml ? 'js-only-no-browser' : 'blocked',
+      reason: found.length > 0 ? undefined : homeHtml ? 'js-only-no-browser' : 'blocked',
     };
   }
+  const merged = [...found];
+  for (const page of rendered.pages) {
+    if (!merged.some((p) => fingerprint(p.text) === fingerprint(page.text))) {
+      merged.push(page);
+    }
+  }
+  const pages = choosePages(merged);
   return {
     siteUrl,
-    pages: rendered.pages,
+    pages,
     failedUrls: [...failedUrls, ...rendered.failedUrls],
     rendered: true,
     homepageHtml: homeHtml || rendered.homepageHtml,
-    reason: rendered.pages.length === 0 ? 'no-policy-found' : undefined,
+    reason: pages.length === 0 ? 'no-policy-found' : undefined,
   };
 }
 
@@ -271,7 +373,7 @@ async function loadRendered(page: import('playwright-core').Page, url: string) {
 
 async function renderPolicyPages(
   siteUrl: string,
-): Promise<{ pages: PolicyPage[]; failedUrls: string[]; homepageHtml?: string } | null> {
+): Promise<{ pages: FoundPage[]; failedUrls: string[]; homepageHtml?: string } | null> {
   const browser = await getBrowser();
   if (!browser) {
     return null;
@@ -284,10 +386,10 @@ async function renderPolicyPages(
   });
   const page = await context.newPage();
   const failedUrls: string[] = [];
-  const pages: PolicyPage[] = [];
+  const pages: FoundPage[] = [];
   try {
     let homepageHtml: string | undefined;
-    let links: string[] = [];
+    let links: LinkRef[] = [];
     try {
       await loadRendered(page, siteUrl);
       homepageHtml = await page.content();
@@ -297,7 +399,7 @@ async function renderPolicyPages(
           const re = new RegExp(pattern, 'i');
           return as
             .filter((a) => re.test(a.getAttribute('href') ?? '') || re.test(a.textContent ?? ''))
-            .map((a) => (a as HTMLAnchorElement).href);
+            .map((a) => ({ url: (a as HTMLAnchorElement).href, label: (a.textContent ?? '').trim() }));
         },
         POLICY_LINK_RE.source,
       );
@@ -305,13 +407,13 @@ async function renderPolicyPages(
       failedUrls.push(siteUrl);
     }
 
-    const candidates = dedupe([
-      ...links.filter((u) => sameSite(u, siteUrl)),
-      ...WELL_KNOWN_PATHS.slice(0, 4).map((p) => `${siteUrl}${p}`),
-    ]).slice(0, 6);
+    const candidates = rankCandidates(
+      [...links, ...WELL_KNOWN_PATHS.slice(0, 4).map((p) => ({ url: `${siteUrl}${p}`, label: '' }))],
+      siteUrl,
+    ).slice(0, 6);
 
     const seen = new Set<string>();
-    for (const url of candidates) {
+    for (const { url, kind, score } of candidates) {
       if (pages.length >= MAX_PAGES) {
         break;
       }
@@ -323,12 +425,11 @@ async function renderPolicyPages(
         }
         const text = (await page.evaluate(() => document.body?.innerText ?? '')).trim();
         const print = fingerprint(text);
-        const looksLikePolicy = /privacy|personal (data|information)|terms|agreement/i.test(text.slice(0, 4000));
-        if (text.length < MIN_TEXT || seen.has(print) || !looksLikePolicy) {
+        if (!looksLikePolicy(text) || seen.has(print)) {
           continue;
         }
         seen.add(print);
-        pages.push({ url: page.url(), text });
+        pages.push({ url: page.url(), text, kind, score });
       } catch {
         failedUrls.push(url);
       }

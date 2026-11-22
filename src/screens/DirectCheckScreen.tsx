@@ -5,7 +5,7 @@ import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { RouteProp } from '@react-navigation/native';
 import type { RootStackParamList } from '../navigation/types';
 import { searchServices, type TosdrSearchService } from '../api/tosdr';
-import { runDirectCheck, type DirectCheckResult } from '../api/directCheck';
+import { normalizeSiteUrl, runDirectCheck, type DirectCheckResult } from '../api/directCheck';
 import { useStore, followKey } from '../state/store';
 import { Button, ClauseQuote, GradeBadge, Link, Note, SectionTitle, TextField } from '../components/ui';
 import { ServiceLogo } from '../components/ServiceLogo';
@@ -44,9 +44,29 @@ export default function DirectCheckScreen(): React.JSX.Element {
     return store.follows.some((f) => f.source === 'direct' && f.directCheckId === phase.result.id);
   }, [phase, store.follows]);
 
+  /** A check of this site already saved on this device, newest first. */
+  const savedCheckFor = (input: string): DirectCheckResult | undefined => {
+    let site: string;
+    try {
+      site = normalizeSiteUrl(input);
+    } catch {
+      return undefined;
+    }
+    return Object.values(store.directChecks)
+      .filter((c) => c.siteUrl === site)
+      .sort((a, b) => b.fetchedAt.localeCompare(a.fetchedAt))[0];
+  };
+
   const start = async () => {
     if (name.trim() === '') {
       setPhase({ kind: 'error', message: 'Enter the service name first.' });
+      return;
+    }
+    // Already checked this site: show that instead of paying to grade it
+    // again. "Check again" on the result runs a fresh check.
+    const saved = savedCheckFor(siteUrl);
+    if (saved) {
+      setPhase({ kind: 'done', result: saved });
       return;
     }
     // Step 1: always check ToS;DR first. If it rates the service, offer
@@ -67,6 +87,19 @@ export default function DirectCheckScreen(): React.JSX.Element {
       const result = await runDirectCheck(name, siteUrl);
       store.saveDirectCheck(result);
       setPhase({ kind: 'done', result });
+    } catch (err) {
+      setPhase({ kind: 'error', message: err instanceof Error ? err.message : 'Direct check failed.' });
+    }
+  };
+
+  const checkAgain = async (previous: DirectCheckResult) => {
+    setPhase({ kind: 'fetching' });
+    try {
+      const result = await runDirectCheck(previous.name, previous.siteUrl, { fresh: true });
+      // Keep the id so the dashboard entry follows the new result.
+      const updated = { ...result, id: previous.id };
+      store.saveDirectCheck(updated);
+      setPhase({ kind: 'done', result: updated });
     } catch (err) {
       setPhase({ kind: 'error', message: err instanceof Error ? err.message : 'Direct check failed.' });
     }
@@ -177,6 +210,13 @@ export default function DirectCheckScreen(): React.JSX.Element {
       {result.failedUrls.length > 0 && (
         <Text style={styles.failed}>{`Couldn't read: ${result.failedUrls.map((u) => u.replace(/^https?:\/\//, '')).join(', ')}`}</Text>
       )}
+
+      <Button
+        label="Check again"
+        variant="secondary"
+        onPress={() => void checkAgain(result)}
+        style={styles.primaryAction}
+      />
 
       {result.rating ? (
         <Note title="About this grade">

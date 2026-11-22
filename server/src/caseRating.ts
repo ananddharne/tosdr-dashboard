@@ -15,12 +15,16 @@
 // What differs from ToS;DR: their points are approved by human curators;
 // these are matched by a model. Results are always labelled "estimated".
 
-import { callModel, type ModelProvider } from './modelApi';
+import { callModel, type ModelProvider, type ModelUsage } from './modelApi';
 import type { PolicyPage } from './policyPages';
 
 const TOSDR_API = 'https://api.tosdr.org';
 const CATALOG_TTL_MS = 24 * 60 * 60 * 1000;
-const MAX_POLICY_CHARS = 60_000; // sent to the model across all pages
+// Policy text sent to the model across all pages. Cutting policies short
+// made grades much worse in testing (bad clauses sit near the end), so the
+// default sends the full text. On a free-tier key, set
+// RATING_MAX_POLICY_CHARS=60000 to stay within quota.
+const DEFAULT_MAX_POLICY_CHARS = 400_000;
 const MIN_QUOTE = 20;
 // The catalog is split into batches, one model call each: with all ~270
 // cases in one call the model skims and matches only a handful.
@@ -57,6 +61,7 @@ export interface EstimatedRating {
   model: string;
   textTruncated: boolean;
   rejectedQuotes: number; // proposed by the model but not found on the page
+  usage: ModelUsage; // summed over all batches
   incomplete: boolean; // some case batches failed, so cases may be missing
 }
 
@@ -186,8 +191,8 @@ const SYSTEM = [
   '- Reply with ONLY a JSON array, no prose: [{"case_id": 123, "quote": "exact text"}]',
 ].join('\n');
 
-function buildPolicyText(pages: PolicyPage[]): { text: string; truncated: boolean } {
-  const perPage = Math.floor(MAX_POLICY_CHARS / Math.max(1, pages.length));
+function buildPolicyText(pages: PolicyPage[], maxChars: number): { text: string; truncated: boolean } {
+  const perPage = Math.floor(maxChars / Math.max(1, pages.length));
   let truncated = false;
   const parts = pages.map((p) => {
     const t = normalize(p.text);
@@ -226,10 +231,18 @@ export async function rateFromPolicy(
   model: string,
   serviceName: string,
   pages: PolicyPage[],
+  opts: { maxPolicyChars?: number } = {},
 ): Promise<EstimatedRating> {
   const cases = await getCaseCatalog();
   const byId = new Map(cases.map((c) => [c.id, c]));
-  const { text, truncated } = buildPolicyText(pages);
+  const maxChars = opts.maxPolicyChars ?? (Number(process.env.RATING_MAX_POLICY_CHARS) || DEFAULT_MAX_POLICY_CHARS);
+  const { text, truncated } = buildPolicyText(pages, maxChars);
+  const usage: ModelUsage = { inputTokens: 0, cachedTokens: 0, outputTokens: 0 };
+  const onUsage = (u: ModelUsage) => {
+    usage.inputTokens += u.inputTokens;
+    usage.cachedTokens += u.cachedTokens;
+    usage.outputTokens += u.outputTokens;
+  };
 
   const batches: TosdrCaseLite[][] = [];
   for (let i = 0; i < cases.length; i += CASES_PER_BATCH) {
@@ -239,8 +252,10 @@ export async function rateFromPolicy(
     const caseList = batch
       .map((c) => `${c.id}: ${c.title}${c.description ? ` (${c.description})` : ''}`)
       .join('\n');
-    const user = `SERVICE: ${serviceName}\n\nCASES:\n${caseList}\n\nPOLICY TEXT:\n${text}`;
-    return callModel(provider, apiKey, model, SYSTEM, user, { maxTokens: 8000, timeoutMs: 120_000 });
+    // Policy first, cases last: every batch then shares the same long
+    // prefix, which providers bill at a cached (much cheaper) rate.
+    const user = `SERVICE: ${serviceName}\n\nPOLICY TEXT:\n${text}\n\nCASES TO CHECK:\n${caseList}`;
+    return callModel(provider, apiKey, model, SYSTEM, user, { maxTokens: 16000, timeoutMs: 180_000, onUsage });
   };
   // A failed batch only loses its own cases; the check fails if all do.
   const replies: string[] = [];
@@ -293,5 +308,5 @@ export async function rateFromPolicy(
   const order: Record<string, number> = { blocker: 0, bad: 1, good: 2, neutral: 3 };
   points.sort((a, b) => (order[a.classification] ?? 4) - (order[b.classification] ?? 4));
   const counts = countCases(points);
-  return { grade: tosdrGrade(counts), points, counts, model, textTruncated: truncated, rejectedQuotes: rejected, incomplete: failures > 0 };
+  return { grade: tosdrGrade(counts), points, counts, model, textTruncated: truncated, rejectedQuotes: rejected, usage, incomplete: failures > 0 };
 }

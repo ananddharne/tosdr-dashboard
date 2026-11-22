@@ -56,7 +56,8 @@ import { buildGroundedPrompt, type PromptPoint } from './prompt';
 import { callModel, resolveProvider } from './modelApi';
 import { rateFromPolicy, type EstimatedRating } from './caseRating';
 import { RateLimiter } from './rateLimit';
-import { readPolicyPages } from './policyPages';
+import { normalizeSite, readPolicyPages } from './policyPages';
+import { CheckCache } from './checkCache';
 
 // --- Local .env loading (development convenience only) --------------------
 // Reads server/.env if present. Production hosts must set the variable in
@@ -243,14 +244,60 @@ async function handleChat(req: http.IncomingMessage, res: http.ServerResponse): 
 
 const pageLimiter = new RateLimiter(10, 60_000);
 
+interface DirectCheckPayload {
+  siteUrl: string;
+  pages: { url: string; text: string }[];
+  failedUrls: string[];
+  rendered: boolean;
+  homepageHtml?: string;
+  reason?: string;
+  rating?: EstimatedRating;
+  ratingError?: string;
+}
+
+const checkCache = new CheckCache<DirectCheckPayload>();
+
+/** Read a site's policy pages and (optionally) grade them. Not cached. */
+async function runDirectCheck(siteUrl: string, serviceName: string, rate: boolean): Promise<DirectCheckPayload> {
+  const result = await readPolicyPages(siteUrl);
+  // Estimated ToS;DR-style rating (see caseRating.ts). Needs the model key;
+  // without it the app falls back to its keyword-only quotes.
+  let rating: EstimatedRating | undefined;
+  let ratingError: string | undefined;
+  if (rate && result.pages.length > 0) {
+    if (API_KEY === null) {
+      ratingError = 'not-configured';
+    } else {
+      try {
+        rating = await rateFromPolicy(PROVIDER, API_KEY, MODEL, serviceName || result.siteUrl, result.pages);
+        const u = rating.usage;
+        console.log(
+          `Rated ${result.siteUrl}: ${rating.grade} (in ${u.inputTokens}, cached ${u.cachedTokens}, out ${u.outputTokens} tokens)`,
+        );
+      } catch (err) {
+        console.error('Rating failed:', err instanceof Error ? err.message : err);
+        ratingError = 'failed';
+      }
+    }
+  }
+  // Cap what goes back to the phone: policy text only, no full HTML dumps.
+  return {
+    ...result,
+    rating,
+    ratingError,
+    pages: result.pages.map((p) => ({ url: p.url, text: p.text.slice(0, 200_000) })),
+    homepageHtml: result.homepageHtml?.slice(0, 300_000),
+  };
+}
+
 async function handleDirectCheckPages(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
   if (!pageLimiter.allow(clientIp(req))) {
     sendJson(res, 429, { error: 'Too many checks. Try again in a minute.' });
     return;
   }
-  let body: { siteUrl?: unknown; serviceName?: unknown; rate?: unknown };
+  let body: { siteUrl?: unknown; serviceName?: unknown; rate?: unknown; fresh?: unknown };
   try {
-    body = JSON.parse(await readBody(req)) as { siteUrl?: unknown; serviceName?: unknown; rate?: unknown };
+    body = JSON.parse(await readBody(req)) as typeof body;
   } catch {
     sendJson(res, 400, { error: 'Request body must be valid JSON.' });
     return;
@@ -260,35 +307,20 @@ async function handleDirectCheckPages(req: http.IncomingMessage, res: http.Serve
     return;
   }
   try {
-    const result = await readPolicyPages(body.siteUrl);
-    // Estimated ToS;DR-style rating (see caseRating.ts). Needs the model key;
-    // without it the app falls back to its keyword-only quotes.
-    let rating: EstimatedRating | undefined;
-    let ratingError: string | undefined;
-    if (body.rate !== false && result.pages.length > 0) {
-      if (API_KEY === null) {
-        ratingError = 'not-configured';
-      } else {
-        const serviceName =
-          typeof body.serviceName === 'string' && body.serviceName.trim() !== ''
-            ? body.serviceName.trim().slice(0, 100)
-            : result.siteUrl;
-        try {
-          rating = await rateFromPolicy(PROVIDER, API_KEY, MODEL, serviceName, result.pages);
-        } catch (err) {
-          console.error('Rating failed:', err instanceof Error ? err.message : err);
-          ratingError = 'failed';
-        }
-      }
-    }
-    // Cap what goes back to the phone: policy text only, no full HTML dumps.
-    sendJson(res, 200, {
-      ...result,
-      rating,
-      ratingError,
-      pages: result.pages.map((p) => ({ url: p.url, text: p.text.slice(0, 200_000) })),
-      homepageHtml: result.homepageHtml?.slice(0, 300_000),
-    });
+    const siteUrl = normalizeSite(body.siteUrl);
+    const rate = body.rate !== false;
+    const serviceName =
+      typeof body.serviceName === 'string' ? body.serviceName.trim().slice(0, 100) : '';
+    // One result per site (and model), shared by every user. A result is
+    // only cached when it is complete: graded with nothing missing.
+    const key = `${siteUrl}|${rate ? `rated:${MODEL}` : 'pages'}`;
+    const { value, cachedAt } = await checkCache.run(
+      key,
+      () => runDirectCheck(siteUrl, serviceName, rate),
+      (v) => v.pages.length > 0 && (!rate || (v.rating !== undefined && !v.rating.incomplete)),
+      { fresh: body.fresh === true },
+    );
+    sendJson(res, 200, { ...value, cachedAt: cachedAt ? new Date(cachedAt).toISOString() : undefined });
   } catch (err) {
     sendJson(res, 400, { error: err instanceof Error ? err.message : 'Could not read that site.' });
   }

@@ -18,3 +18,9 @@ services:
         sync: false
       - key: MODEL_PROVIDER
         value: gemini
+      # Paid Gemini key: 3.8 Flash grading the full policy text was the best
+      # value in testing (~$0.07-0.25 per check, cached per site for 7 days).
+      - key: MODEL_NAME
+        value: gemini-3.8-flash
+      - key: RATING_MAX_POLICY_CHARS
+        value: "400000"

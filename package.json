@@ -29,7 +29,8 @@
     "ios": "expo start --ios",
     "start": "expo start",
     "typecheck": "tsc --noEmit",
-    "web": "expo start --web"
+    "web": "expo start --web",
+    "deploy:web": "bash scripts/deploy-web.sh"
   },
   "version": "0.1.0"
 }

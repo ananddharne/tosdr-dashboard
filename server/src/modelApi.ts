@@ -13,13 +13,18 @@ export interface ModelProvider {
   id: string;
   url: string;
   defaultModel: string;
+  // Used once if the chosen model is still overloaded after a retry.
+  fallbackModel?: string;
 }
 
 const PROVIDERS: Record<string, ModelProvider> = {
   gemini: {
     id: 'gemini',
     url: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions',
-    defaultModel: 'gemini-3.6-flash',
+    // 3.8 Flash with full policy text matched ToS;DR best per dollar in
+    // our Nov 2026 comparison; 3.6 Flash is the same price and a fallback.
+    defaultModel: 'gemini-3.8-flash',
+    fallbackModel: 'gemini-3.6-flash',
   },
   meta: {
     id: 'meta',
@@ -44,7 +49,26 @@ const RETRY_DELAY_MS = 3000;
 
 interface ChatCompletionsResponse {
   choices?: { message?: { content?: string } }[];
+  usage?: {
+    prompt_tokens?: number;
+    completion_tokens?: number;
+    total_tokens?: number;
+    prompt_tokens_details?: { cached_tokens?: number };
+  };
 }
+
+export interface ModelUsage {
+  inputTokens: number; // includes cached
+  cachedTokens: number;
+  outputTokens: number; // includes reasoning
+}
+
+type CallOpts = {
+  maxTokens?: number;
+  timeoutMs?: number;
+  temperature?: number;
+  onUsage?: (u: ModelUsage) => void;
+};
 
 class RetryableError extends Error {}
 
@@ -53,6 +77,7 @@ async function once(
   apiKey: string,
   body: string,
   timeoutMs: number,
+  onUsage?: (u: ModelUsage) => void,
 ): Promise<string> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -69,6 +94,15 @@ async function once(
       throw RETRY_STATUSES.has(res.status) ? new RetryableError(message) : new Error(message);
     }
     const data = (await res.json()) as ChatCompletionsResponse;
+    if (onUsage && data.usage) {
+      const input = data.usage.prompt_tokens ?? 0;
+      onUsage({
+        inputTokens: input,
+        cachedTokens: data.usage.prompt_tokens_details?.cached_tokens ?? 0,
+        // total - prompt covers output plus reasoning tokens
+        outputTokens: Math.max(data.usage.completion_tokens ?? 0, (data.usage.total_tokens ?? 0) - input),
+      });
+    }
     const content = data.choices?.[0]?.message?.content;
     if (typeof content !== 'string' || content.trim() === '') {
       throw new Error(`${provider.id} model API returned an empty answer.`);
@@ -86,26 +120,36 @@ export async function callModel(
   model: string,
   system: string,
   user: string,
-  opts: { maxTokens?: number; timeoutMs?: number; temperature?: number } = {},
+  opts: CallOpts = {},
 ): Promise<string> {
-  const body = JSON.stringify({
-    model,
-    messages: [
-      { role: 'system', content: system },
-      { role: 'user', content: user },
-    ],
-    temperature: opts.temperature ?? 0.2,
-    // Gemini counts its internal reasoning against this cap, so keep it roomy.
-    max_tokens: opts.maxTokens ?? 2000,
-  });
+  const makeBody = (m: string) =>
+    JSON.stringify({
+      model: m,
+      messages: [
+        { role: 'system', content: system },
+        { role: 'user', content: user },
+      ],
+      temperature: opts.temperature ?? 0.2,
+      // Gemini counts its internal reasoning against this cap, so keep it roomy.
+      max_tokens: opts.maxTokens ?? 2000,
+    });
   const timeoutMs = opts.timeoutMs ?? TIMEOUT_MS;
   try {
-    return await once(provider, apiKey, body, timeoutMs);
+    return await once(provider, apiKey, makeBody(model), timeoutMs, opts.onUsage);
   } catch (err) {
     if (!(err instanceof RetryableError)) {
       throw err;
     }
-    await new Promise((r) => setTimeout(r, RETRY_DELAY_MS));
-    return once(provider, apiKey, body, timeoutMs);
+  }
+  await new Promise((r) => setTimeout(r, RETRY_DELAY_MS));
+  try {
+    return await once(provider, apiKey, makeBody(model), timeoutMs, opts.onUsage);
+  } catch (err) {
+    const fallback = provider.fallbackModel;
+    if (!(err instanceof RetryableError) || !fallback || fallback === model) {
+      throw err;
+    }
+    console.warn(`${model} still unavailable; using ${fallback} for this call.`);
+    return once(provider, apiKey, makeBody(fallback), timeoutMs, opts.onUsage);
   }
 }

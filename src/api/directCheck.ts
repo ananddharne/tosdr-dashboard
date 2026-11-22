@@ -224,6 +224,7 @@ interface PolicyPage {
 }
 
 interface PolicyPages {
+  cachedAt?: string; // set when the server returned an earlier result
   pages: PolicyPage[];
   rating?: DirectCheckRating;
   ratingError?: 'not-configured' | 'failed';
@@ -272,7 +273,7 @@ function policyLinks(html: string, siteUrl: string): string[] {
 
 const shellPrint = (text: string) => text.replace(/\s+/g, ' ').slice(0, 3000);
 
-async function pagesFromServer(siteUrl: string, serviceName: string): Promise<PolicyPages> {
+async function pagesFromServer(siteUrl: string, serviceName: string, fresh: boolean): Promise<PolicyPages> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), SERVER_TIMEOUT_MS);
   let res: Response;
@@ -280,7 +281,7 @@ async function pagesFromServer(siteUrl: string, serviceName: string): Promise<Po
     res = await fetch(`${backendUrl()}/direct-check/pages`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ siteUrl, serviceName }),
+      body: JSON.stringify({ siteUrl, serviceName, fresh }),
       signal: controller.signal,
     });
   } catch {
@@ -298,6 +299,7 @@ async function pagesFromServer(siteUrl: string, serviceName: string): Promise<Po
     reason?: string;
     rating?: DirectCheckRating;
     ratingError?: 'not-configured' | 'failed';
+    cachedAt?: string;
   };
   if (!res.ok) {
     throw new DirectCheckError(data.error ?? `The app server couldn't check this site (error ${res.status}).`);
@@ -318,6 +320,7 @@ async function pagesFromServer(siteUrl: string, serviceName: string): Promise<Po
     homepageHtml: data.homepageHtml,
     rating: data.rating,
     ratingError: data.ratingError,
+    cachedAt: data.cachedAt,
   };
 }
 
@@ -374,10 +377,15 @@ async function pagesFromDevice(siteUrl: string): Promise<PolicyPages> {
  * Read a service's own policy pages and extract verbatim-quote findings.
  * Returns findings grouped by topic plus the topics with no evidence.
  */
-export async function runDirectCheck(name: string, siteUrlInput: string): Promise<DirectCheckResult> {
+export async function runDirectCheck(
+  name: string,
+  siteUrlInput: string,
+  opts: { fresh?: boolean } = {},
+): Promise<DirectCheckResult> {
   const siteUrl = normalizeSiteUrl(siteUrlInput);
-  const { pages, failedUrls, homepageHtml, rating, ratingError } = isBackendConfigured()
-    ? await pagesFromServer(siteUrl, name.trim())
+  // fresh: skip the server's shared cache and grade the site again.
+  const { pages, failedUrls, homepageHtml, rating, ratingError, cachedAt } = isBackendConfigured()
+    ? await pagesFromServer(siteUrl, name.trim(), opts.fresh === true)
     : await pagesFromDevice(siteUrl);
 
   const iconUrl = homepageHtml ? extractIconUrl(homepageHtml, siteUrl) : `${siteUrl}/favicon.ico`;
@@ -414,7 +422,7 @@ export async function runDirectCheck(name: string, siteUrlInput: string): Promis
     id: `direct-${Date.now()}`,
     name: name.trim(),
     siteUrl,
-    fetchedAt: new Date().toISOString(),
+    fetchedAt: cachedAt ?? new Date().toISOString(),
     fetchedUrls: pages.map((p) => p.url),
     failedUrls,
     findings,
