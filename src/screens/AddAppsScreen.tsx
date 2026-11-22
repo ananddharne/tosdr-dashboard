@@ -1,20 +1,24 @@
 import React, { useEffect, useRef, useState } from 'react';
-import {
-  ActivityIndicator,
-  FlatList,
-  StyleSheet,
-  Text,
-  TextInput,
-  TouchableOpacity,
-  View,
-} from 'react-native';
+import { ActivityIndicator, FlatList, Text, View } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
 import { searchServices, type TosdrSearchService } from '../api/tosdr';
 import { appInventory, type InstalledApp } from '../services/appInventory';
 import { useStore } from '../state/store';
-import { GradeBadge, Note, SectionTitle } from '../components/ui';
+import {
+  Button,
+  Chip,
+  ChipRow,
+  GradeBadge,
+  Note,
+  SectionTitle,
+  TextField,
+  useListItemStyle,
+} from '../components/ui';
+import { ServiceLogo } from '../components/ServiceLogo';
+import { tosdrLogoUrl } from '../utils/logos';
+import { makeStyles, space, type, useTheme } from '../theme';
 
 type Nav = NativeStackNavigationProp<RootStackParamList>;
 
@@ -39,6 +43,9 @@ const POPULAR_CATALOG: { name: string; query: string }[] = [
 export default function AddAppsScreen(): React.JSX.Element {
   const navigation = useNavigation<Nav>();
   const store = useStore();
+  const { c } = useTheme();
+  const styles = useStyles();
+  const listItemStyle = useListItemStyle();
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<TosdrSearchService[]>([]);
   const [searching, setSearching] = useState(false);
@@ -96,181 +103,157 @@ export default function AddAppsScreen(): React.JSX.Element {
 
   return (
     <FlatList
+      style={styles.screen}
       data={results}
       keyExtractor={(item) => String(item.id)}
+      keyboardShouldPersistTaps="handled"
       ListHeaderComponent={
         <View style={styles.header}>
-          <TextInput
-            style={styles.search}
+          <TextField
             placeholder="Search services, e.g. Spotify"
             value={query}
             onChangeText={setQuery}
             autoCapitalize="none"
             autoCorrect={false}
             returnKeyType="search"
+            accessibilityLabel="Search services"
           />
-          {searching && <ActivityIndicator style={styles.spinner} />}
-          {searchError !== null && <Text style={styles.error}>{searchError}</Text>}
-
-          <SectionTitle>On this device</SectionTitle>
-          {installed.length === 0 ? (
-            <Note>
-              {`Automatic detection is not active in this build (${appInventory.sourceLabel}). Add apps manually below — on Android, a native build can populate this list automatically (see src/services/appInventory.ts).`}
-            </Note>
-          ) : (
-            installed.map((app) => (
-              <Text key={app.packageName} style={styles.deviceApp}>
-                • {app.label}
-              </Text>
-            ))
+          {searching && <ActivityIndicator style={styles.spinner} color={c.tint} />}
+          {searchError !== null && (
+            <Text style={styles.error}>{`Search didn't work: ${searchError} Check your connection and try again.`}</Text>
           )}
 
           {query.trim() === '' && (
             <>
               <SectionTitle>Popular services</SectionTitle>
-              {POPULAR_CATALOG.map((entry) => (
-                <TouchableOpacity key={entry.name} style={styles.catalogRow} onPress={() => setQuery(entry.query)}>
-                  <Text style={styles.catalogName}>{entry.name}</Text>
-                  <Text style={styles.catalogAction}>Search ›</Text>
-                </TouchableOpacity>
-              ))}
+              <ChipRow>
+                {POPULAR_CATALOG.map((entry) => (
+                  <Chip key={entry.name} label={entry.name} selected={false} onPress={() => setQuery(entry.query)} />
+                ))}
+              </ChipRow>
+
+              <SectionTitle>On this device</SectionTitle>
+              {installed.length === 0 ? (
+                <Note>
+                  {`This build can't see your installed apps (${appInventory.sourceLabel}). Search for them above instead.`}
+                </Note>
+              ) : (
+                installed.map((app) => (
+                  <Text key={app.packageName} style={styles.deviceApp}>
+                    {app.label}
+                  </Text>
+                ))
+              )}
             </>
           )}
 
-          <TouchableOpacity style={styles.directButton} onPress={() => navigation.navigate('DirectCheck', {})}>
-            <Text style={styles.directButtonText}>Not rated? Fetch it directly</Text>
-          </TouchableOpacity>
-          <Text style={styles.footer}>Grades and points: ToS;DR (CC BY-SA). See About for attribution.</Text>
+          {results.length > 0 && <SectionTitle>{`${results.length} result${results.length === 1 ? '' : 's'}`}</SectionTitle>}
         </View>
       }
-      renderItem={({ item }) => {
+      renderItem={({ item, index }) => {
         const following = store.isFollowing(item.id);
         return (
-          <View style={styles.row}>
-            <GradeBadge grade={item.rating} />
+          <View style={[listItemStyle(index, results.length), styles.row]}>
+            <ServiceLogo name={item.name} uri={tosdrLogoUrl(item.id)} />
             <View style={styles.rowText}>
-              <Text style={styles.rowName}>{item.name}</Text>
-              <Text style={styles.rowSub}>
+              <Text style={styles.rowName} numberOfLines={1}>
+                {item.name}
+              </Text>
+              <Text style={styles.rowSub} numberOfLines={1}>
                 {item.urls[0] ?? item.slug}
                 {item.is_comprehensively_reviewed ? ' · fully reviewed' : ''}
               </Text>
             </View>
-            <TouchableOpacity
-              style={[styles.followButton, following ? styles.followingButton : undefined]}
+            <GradeBadge grade={item.rating} />
+            <Button
+              compact
+              variant={following ? 'secondary' : 'primary'}
+              label={following ? '✓ Following' : 'Follow'}
               onPress={() => toggleFollow(item)}
-            >
-              <Text style={[styles.followText, following ? styles.followingText : undefined]}>
-                {following ? 'Following' : 'Follow'}
-              </Text>
-            </TouchableOpacity>
+            />
           </View>
         );
       }}
+      ListFooterComponent={
+        <View style={styles.footer}>
+          <Text style={styles.footerTitle}>Can't find an app?</Text>
+          <Text style={styles.footerText}>
+            We can read its privacy policy and terms directly and quote what they say.
+          </Text>
+          <Button
+            label="Check it directly"
+            variant="secondary"
+            onPress={() => navigation.navigate('DirectCheck', {})}
+          />
+          <Text style={styles.attribution}>Grades and points: ToS;DR, CC BY-SA. See About.</Text>
+        </View>
+      }
       contentContainerStyle={styles.listContent}
     />
   );
 }
 
-const styles = StyleSheet.create({
-  catalogAction: {
-    color: '#1d4ed8',
-    fontSize: 14,
-    fontWeight: '600',
-  },
-  catalogName: {
-    fontSize: 15,
-  },
-  catalogRow: {
-    borderBottomColor: '#e2e8f0',
-    borderBottomWidth: 1,
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    paddingVertical: 10,
+const useStyles = makeStyles(({ c }) => ({
+  attribution: {
+    ...type.meta,
+    color: c.inkMuted,
+    marginTop: space[2],
   },
   deviceApp: {
-    fontSize: 14,
+    ...type.body,
+    color: c.ink,
     paddingVertical: 2,
   },
-  directButton: {
-    alignItems: 'center',
-    backgroundColor: '#ffffff',
-    borderColor: '#101828',
-    borderRadius: 10,
-    borderWidth: 1.5,
-    marginTop: 16,
-    paddingVertical: 12,
-  },
-  directButtonText: {
-    color: '#101828',
-    fontSize: 15,
-    fontWeight: '700',
-  },
   error: {
-    color: '#dc2626',
-    fontSize: 13,
-    marginTop: 8,
-  },
-  followButton: {
-    backgroundColor: '#101828',
-    borderRadius: 16,
-    paddingHorizontal: 14,
-    paddingVertical: 7,
-  },
-  followText: {
-    color: '#ffffff',
-    fontSize: 13,
-    fontWeight: '700',
-  },
-  followingButton: {
-    backgroundColor: '#e2e8f0',
-  },
-  followingText: {
-    color: '#334155',
+    ...type.bodySm,
+    color: c.pointBad,
+    marginTop: space[2],
   },
   footer: {
-    color: '#94a3b8',
-    fontSize: 12,
-    marginTop: 16,
-    textAlign: 'center',
+    gap: space[2],
+    marginTop: space[6],
+    paddingHorizontal: space[4],
+  },
+  footerText: {
+    ...type.bodySm,
+    color: c.inkMuted,
+    marginBottom: space[1],
+  },
+  footerTitle: {
+    ...type.headline,
+    color: c.ink,
   },
   header: {
-    padding: 16,
+    paddingBottom: space[1],
+    paddingHorizontal: space[4],
+    paddingTop: space[3],
   },
   listContent: {
-    paddingBottom: 24,
+    paddingBottom: space[8],
   },
   row: {
     alignItems: 'center',
-    backgroundColor: '#ffffff',
-    borderBottomColor: '#e2e8f0',
-    borderBottomWidth: 1,
     flexDirection: 'row',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
+    gap: space[3],
+    paddingHorizontal: space[4],
+    paddingVertical: space[3],
   },
   rowName: {
-    fontSize: 15,
-    fontWeight: '600',
+    ...type.headline,
+    color: c.ink,
   },
   rowSub: {
-    color: '#64748b',
-    fontSize: 12,
-    marginTop: 2,
+    ...type.meta,
+    color: c.inkMuted,
   },
   rowText: {
     flex: 1,
-    marginLeft: 12,
+    gap: 2,
   },
-  search: {
-    backgroundColor: '#ffffff',
-    borderColor: '#cbd5e1',
-    borderRadius: 10,
-    borderWidth: 1,
-    fontSize: 16,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
+  screen: {
+    backgroundColor: c.ground,
   },
   spinner: {
-    marginTop: 12,
+    marginTop: space[3],
   },
-});
+}));

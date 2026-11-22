@@ -1,33 +1,31 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import {
-  ActivityIndicator,
-  FlatList,
-  Linking,
-  StyleSheet,
-  Text,
-  TouchableOpacity,
-  View,
-} from 'react-native';
+import { ActivityIndicator, FlatList, Linking, Text, View } from 'react-native';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { RouteProp } from '@react-navigation/native';
 import type { RootStackParamList } from '../navigation/types';
 import { approvedPoints, type TosdrPoint, type TosdrServiceDetail } from '../api/tosdr';
 import { CONCERNS, filterPointsByConcerns } from '../utils/concerns';
-import { classificationColor, deriveAiLens, type AiStatus } from '../utils/grades';
+import { deriveAiLens, type AiStatus } from '../utils/grades';
 import { useStore } from '../state/store';
-import { Chip, GradeBadge, Note, SectionTitle } from '../components/ui';
+import { Button, Chip, ChipRow, ClauseQuote, GradeBadge, Note, SectionTitle } from '../components/ui';
+import { ServiceLogo } from '../components/ServiceLogo';
+import { tosdrLogoUrl } from '../utils/logos';
+import { hairline, makeStyles, radius, size, space, type, useTheme } from '../theme';
 
 type Nav = NativeStackNavigationProp<RootStackParamList>;
 type Route = RouteProp<RootStackParamList, 'ServiceDetail'>;
 
-function AiRow({ label, status }: { label: string; status: AiStatus }): React.JSX.Element {
-  const text = status === 'yes' ? 'Yes' : status === 'no' ? 'No' : 'Not stated';
-  const color = status === 'yes' ? '#dc2626' : status === 'no' ? '#15803d' : '#64748b';
+function AiRow({ label, status, last }: { label: string; status: AiStatus; last?: boolean }): React.JSX.Element {
+  const { c } = useTheme();
+  const styles = useStyles();
+  // A glyph as well as colour, so the value never depends on colour alone.
+  const text = status === 'yes' ? '− Yes' : status === 'no' ? '+ No' : 'Not stated';
+  const color = status === 'yes' ? c.pointBad : status === 'no' ? c.pointGood : c.inkMuted;
   return (
-    <View style={styles.aiRow}>
+    <View style={[styles.aiRow, last && styles.aiRowLast]}>
       <Text style={styles.aiLabel}>{label}</Text>
-      <Text style={[styles.aiStatus, { color }]}>{text}</Text>
+      <Text style={[status === 'not-stated' ? styles.aiStatusPlain : styles.aiStatus, { color }]}>{text}</Text>
     </View>
   );
 }
@@ -36,6 +34,8 @@ export default function ServiceDetailScreen(): React.JSX.Element {
   const navigation = useNavigation<Nav>();
   const route = useRoute<Route>();
   const store = useStore();
+  const { c } = useTheme();
+  const styles = useStyles();
   const { serviceId } = route.params;
   const [detail, setDetail] = useState<TosdrServiceDetail | null>(null);
   const [loading, setLoading] = useState(true);
@@ -81,7 +81,7 @@ export default function ServiceDetailScreen(): React.JSX.Element {
   if (loading) {
     return (
       <View style={styles.center}>
-        <ActivityIndicator size="large" />
+        <ActivityIndicator size="large" color={c.tint} />
       </View>
     );
   }
@@ -95,69 +95,66 @@ export default function ServiceDetailScreen(): React.JSX.Element {
   }
 
   const renderPoint = ({ item }: { item: TosdrPoint }) => (
-    <View style={styles.pointCard}>
-      <View style={styles.pointHeader}>
-        <Text style={[styles.classification, { color: classificationColor(item.case.classification) }]}>
-          {item.case.classification.toUpperCase()}
-        </Text>
-        <Text style={styles.caseTitle}>{item.case.title}</Text>
-      </View>
-      <Text style={styles.pointTitle}>{item.title}</Text>
-      {item.analysis !== '' && <Text style={styles.analysis}>{item.analysis}</Text>}
-      {item.source !== '' && (
-        <TouchableOpacity onPress={() => void Linking.openURL(item.source)}>
-          <Text style={styles.sourceLink}>Source ↗</Text>
-        </TouchableOpacity>
-      )}
+    <View style={styles.pointWrap}>
+      <ClauseQuote
+        classification={item.case.classification}
+        kicker={item.case.title.trim() !== item.title.trim() ? item.case.title : undefined}
+        title={item.title}
+        body={/^generated through the annotate view\.?$/i.test(item.analysis.trim()) ? undefined : item.analysis}
+        sourceLabel={item.source !== '' ? 'Source' : undefined}
+        onPressSource={item.source !== '' ? () => void Linking.openURL(item.source) : undefined}
+      />
     </View>
   );
 
   return (
     <FlatList
+      style={styles.screen}
       data={points}
       keyExtractor={(item) => String(item.id)}
       ListHeaderComponent={
         <View style={styles.header}>
-          <View style={styles.gradeRow}>
+          <View style={styles.identity}>
+            <ServiceLogo name={detail.name} uri={detail.image ?? tosdrLogoUrl(detail.id)} size="lg" />
+            <View style={styles.identityText}>
+              <Text style={styles.name} accessibilityRole="header">
+                {detail.name}
+              </Text>
+              {detail.urls[0] !== undefined && <Text style={styles.url}>{detail.urls[0]}</Text>}
+            </View>
             <GradeBadge grade={detail.rating} large />
-            <View style={styles.gradeTextWrap}>
-              <Text style={styles.gradeLabel}>ToS;DR grade</Text>
-              <Text style={styles.gradeValue}>{detail.rating}</Text>
-            </View>
-            <View style={styles.gradeTextWrap}>
-              <Text style={styles.gradeLabel}>Reviewed</Text>
-              <Text style={styles.gradeValue}>{detail.is_comprehensively_reviewed ? 'Full' : 'Partial'}</Text>
-            </View>
           </View>
-          {detail.urls[0] !== undefined && <Text style={styles.url}>{detail.urls[0]}</Text>}
-
-          <SectionTitle>AI lens</SectionTitle>
-          <Text style={styles.hint}>
-            Derived only from this service&apos;s rated points. Anything not covered by a point shows as “Not stated”.
+          <Text style={styles.gradeLine}>
+            {`ToS;DR grade ${detail.rating} · ${detail.is_comprehensively_reviewed ? 'fully reviewed' : 'partly reviewed'}`}
           </Text>
+
+          <SectionTitle>AI practices</SectionTitle>
           {lens !== null && (
             <View style={styles.aiCard}>
-              <AiRow label="Trains on your data" status={lens.trainsOnUserData} />
-              <AiRow label="Automated decisions" status={lens.automatedDecisions} />
-              <AiRow label="Third-party AI models" status={lens.thirdPartyModels} />
-              {lens.evidence.map((ev, i) => (
-                <Text key={`${ev.field}-${i}`} style={styles.evidence}>
-                  • {ev.pointTitle} ({ev.caseTitle})
+              <AiRow label="Trains AI on your data" status={lens.trainsOnUserData} />
+              <AiRow label="Makes automated decisions" status={lens.automatedDecisions} />
+              <AiRow label="Uses third-party AI models" status={lens.thirdPartyModels} last />
+            </View>
+          )}
+          {lens !== null && lens.evidence.length > 0 && (
+            <View style={styles.evidence}>
+              {[...new Set(lens.evidence.map((ev) => ev.pointTitle))].map((title) => (
+                <Text key={title} style={styles.evidenceText}>
+                  {`From: ${title}`}
                 </Text>
               ))}
             </View>
           )}
+          <Text style={styles.hint}>Based only on this service's rated points. Anything they don't cover shows as Not stated.</Text>
 
-          <TouchableOpacity
-            style={styles.chatButton}
+          <Button
+            label="Ask about this service"
             onPress={() => navigation.navigate('Chat', { serviceId: detail.id })}
-          >
-            <Text style={styles.chatButtonText}>Ask about this service</Text>
-          </TouchableOpacity>
+            style={styles.askButton}
+          />
 
-          <SectionTitle>Points ({points.length})</SectionTitle>
-          <Text style={styles.hint}>Filter by concern. No selection shows all approved points.</Text>
-          <View style={styles.chipRow}>
+          <SectionTitle>{`What the terms say · ${points.length}`}</SectionTitle>
+          <ChipRow>
             {CONCERNS.map((concern) => (
               <Chip
                 key={concern.id}
@@ -166,10 +163,9 @@ export default function ServiceDetailScreen(): React.JSX.Element {
                 onPress={() => toggleConcern(concern.id)}
               />
             ))}
-          </View>
-          {points.length === 0 && (
-            <Note>No approved points match the selected concerns for this service.</Note>
-          )}
+          </ChipRow>
+          <View style={styles.gap} />
+          {points.length === 0 && <Note>No approved points match the concerns you picked.</Note>}
         </View>
       }
       renderItem={renderPoint}
@@ -178,125 +174,102 @@ export default function ServiceDetailScreen(): React.JSX.Element {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles(({ c }) => ({
   aiCard: {
-    backgroundColor: '#f8fafc',
-    borderColor: '#e2e8f0',
-    borderRadius: 10,
-    borderWidth: 1,
-    padding: 12,
+    backgroundColor: c.surface,
+    borderRadius: radius.md,
+    paddingLeft: space[4],
   },
   aiLabel: {
-    fontSize: 14,
+    ...type.body,
+    color: c.ink,
+    flex: 1,
   },
   aiRow: {
+    alignItems: 'center',
+    borderBottomColor: c.line,
+    borderBottomWidth: hairline,
     flexDirection: 'row',
-    justifyContent: 'space-between',
-    paddingVertical: 5,
+    gap: space[3],
+    minHeight: size.tapMin,
+    paddingRight: space[4],
+    paddingVertical: space[2],
+  },
+  aiRowLast: {
+    borderBottomWidth: 0,
   },
   aiStatus: {
-    fontSize: 14,
-    fontWeight: '700',
+    ...type.headline,
   },
-  analysis: {
-    color: '#475569',
-    fontSize: 13,
-    lineHeight: 19,
-    marginTop: 4,
+  aiStatusPlain: {
+    ...type.body,
   },
-  caseTitle: {
-    color: '#64748b',
-    flex: 1,
-    fontSize: 12,
+  askButton: {
+    marginTop: space[6],
   },
   center: {
     alignItems: 'center',
+    backgroundColor: c.ground,
     flex: 1,
     justifyContent: 'center',
-    padding: 24,
-  },
-  chatButton: {
-    alignItems: 'center',
-    backgroundColor: '#101828',
-    borderRadius: 10,
-    marginTop: 12,
-    paddingVertical: 12,
-  },
-  chatButtonText: {
-    color: '#ffffff',
-    fontSize: 15,
-    fontWeight: '700',
-  },
-  chipRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-  },
-  classification: {
-    fontSize: 12,
-    fontWeight: '800',
-    marginRight: 8,
+    padding: space[6],
   },
   error: {
-    color: '#dc2626',
-    fontSize: 14,
+    ...type.body,
+    color: c.ink,
     textAlign: 'center',
   },
   evidence: {
-    color: '#475569',
-    fontSize: 12,
-    lineHeight: 17,
-    marginTop: 4,
+    gap: 2,
+    marginLeft: space[4],
+    marginTop: space[2],
   },
-  gradeLabel: {
-    color: '#64748b',
-    fontSize: 12,
+  evidenceText: {
+    ...type.meta,
+    color: c.inkMuted,
   },
-  gradeRow: {
-    alignItems: 'center',
-    flexDirection: 'row',
+  gap: {
+    height: space[3],
   },
-  gradeTextWrap: {
-    marginLeft: 12,
-  },
-  gradeValue: {
-    fontSize: 18,
-    fontWeight: '800',
+  gradeLine: {
+    ...type.bodySm,
+    color: c.inkMuted,
+    marginTop: space[3],
   },
   header: {
-    padding: 16,
+    paddingHorizontal: space[4],
+    paddingTop: space[2],
   },
   hint: {
-    color: '#64748b',
-    fontSize: 12,
-    marginBottom: 8,
+    ...type.footnote,
+    color: c.inkMuted,
+    marginHorizontal: space[4],
+    marginTop: space[2],
+  },
+  identity: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 14,
+  },
+  identityText: {
+    flex: 1,
+    gap: 2,
   },
   listContent: {
-    paddingBottom: 24,
+    paddingBottom: space[8],
   },
-  pointCard: {
-    backgroundColor: '#ffffff',
-    borderBottomColor: '#e2e8f0',
-    borderBottomWidth: 1,
-    paddingHorizontal: 16,
-    paddingVertical: 12,
+  name: {
+    ...type.title,
+    color: c.ink,
   },
-  pointHeader: {
-    flexDirection: 'row',
+  pointWrap: {
+    paddingHorizontal: space[4],
   },
-  pointTitle: {
-    fontSize: 15,
-    fontWeight: '600',
-    marginTop: 4,
-  },
-  sourceLink: {
-    color: '#1d4ed8',
-    fontSize: 13,
-    fontWeight: '600',
-    marginTop: 6,
+  screen: {
+    backgroundColor: c.ground,
   },
   url: {
-    color: '#64748b',
-    fontSize: 13,
-    marginTop: 8,
+    ...type.meta,
+    color: c.inkMuted,
   },
-});
+}));

@@ -18,6 +18,10 @@
     "version": "0.1.0",
     "experiments": {
       "baseUrl": "/tosdr-dashboard"
-    }
+    },
+    "plugins": [
+      "expo-asset",
+      "expo-font"
+    ]
   }
 }

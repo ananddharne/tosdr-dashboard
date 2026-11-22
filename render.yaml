@@ -1,0 +1,20 @@
+# Render blueprint for the backend (server/). In Render: New > Blueprint,
+# pick this repo, then enter MODEL_API_KEY when prompted. Never put the key
+# in this file — the repo is public.
+services:
+  - type: web
+    name: tosdr-dashboard-server
+    runtime: docker
+    dockerfilePath: ./server/Dockerfile
+    dockerContext: ./server
+    # Free instances sleep when idle (~1 min cold start) and have 512 MB,
+    # which is tight for headless Chromium. Use 'starter' if direct checks
+    # crash or time out.
+    plan: free
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: MODEL_API_KEY
+        sync: false
+      - key: MODEL_PROVIDER
+        value: gemini

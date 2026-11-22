@@ -1,4 +1,5 @@
 import type { TosdrPoint } from '../api/tosdr';
+import { backendUrl, isBackendConfigured } from './backend';
 
 // Chat backend client. The app talks to OUR OWN backend (see server/),
 // never to a model API directly — so no API key of any kind lives in the
@@ -23,10 +24,10 @@ export interface LlmChatResult {
   citations: LlmCitation[];
 }
 
-const BASE_URL = (process.env.EXPO_PUBLIC_CHAT_API_URL ?? '').replace(/\/$/, '');
+const BASE_URL = backendUrl();
 
 export function isLlmChatConfigured(): boolean {
-  return BASE_URL !== '';
+  return isBackendConfigured();
 }
 
 export async function askLlmChat(

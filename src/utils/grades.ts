@@ -1,42 +1,12 @@
 import type { TosdrPoint } from '../api/tosdr';
 
-// Grade ordering and colours. Worst grade first on the dashboard:
+// Grade ordering (colours live in src/theme). Worst grade first on the dashboard:
 // E, D, C, B, A, then unrated/unknown ("N/A") at the end.
 
 export const GRADE_ORDER: Record<string, number> = { E: 0, D: 1, C: 2, B: 3, A: 4 };
 
 export function gradeRank(grade: string): number {
   return GRADE_ORDER[grade.toUpperCase()] ?? 5;
-}
-
-export function gradeColor(grade: string): string {
-  switch (grade.toUpperCase()) {
-    case 'A':
-      return '#15803d';
-    case 'B':
-      return '#65a30d';
-    case 'C':
-      return '#ca8a04';
-    case 'D':
-      return '#ea580c';
-    case 'E':
-      return '#dc2626';
-    default:
-      return '#64748b';
-  }
-}
-
-export function classificationColor(classification: string): string {
-  switch (classification.toLowerCase()) {
-    case 'good':
-      return '#15803d';
-    case 'bad':
-      return '#dc2626';
-    case 'blocker':
-      return '#991b1b';
-    default:
-      return '#64748b';
-  }
 }
 
 // --- AI lens ---------------------------------------------------------------

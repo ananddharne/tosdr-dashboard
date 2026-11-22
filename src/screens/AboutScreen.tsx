@@ -1,16 +1,18 @@
 import React from 'react';
-import { Linking, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Linking, ScrollView, Text, View } from 'react-native';
 import { TOSDR_API_BASE, TOSDR_SITE } from '../api/tosdr';
 import { appInventory } from '../services/appInventory';
-import { SectionTitle } from '../components/ui';
+import { Link, SectionTitle } from '../components/ui';
+import { makeStyles, space, type } from '../theme';
 
 // About screen. Carries the attribution the ToS;DR licence requires:
 // grades and points are ToS;DR data (CC BY-SA 3.0), and this app is an
 // independent client, not affiliated with ToS;DR.
 
 export default function AboutScreen(): React.JSX.Element {
+  const styles = useStyles();
   return (
-    <ScrollView contentContainerStyle={styles.container}>
+    <ScrollView style={styles.screen} contentContainerStyle={styles.container}>
       <Text style={styles.title}>ToS;DR Dashboard</Text>
       <Text style={styles.body}>
         A personalized dashboard for the terms of the apps and sites you actually use. Follow services, see their grades
@@ -24,12 +26,10 @@ export default function AboutScreen(): React.JSX.Element {
         ToS;DR data is published under CC BY-SA 3.0. This app is an independent client and is not affiliated with,
         endorsed by, or connected to ToS;DR.
       </Text>
-      <TouchableOpacity onPress={() => void Linking.openURL(TOSDR_SITE)}>
-        <Text style={styles.link}>{TOSDR_SITE} ↗</Text>
-      </TouchableOpacity>
-      <TouchableOpacity onPress={() => void Linking.openURL(TOSDR_API_BASE)}>
-        <Text style={styles.link}>{TOSDR_API_BASE} ↗</Text>
-      </TouchableOpacity>
+      <View style={styles.links}>
+        <Link label={`${TOSDR_SITE.replace(/^https?:\/\//, '')} ↗`} onPress={() => void Linking.openURL(TOSDR_SITE)} />
+        <Link label={`${TOSDR_API_BASE.replace(/^https?:\/\//, '')} ↗`} onPress={() => void Linking.openURL(TOSDR_API_BASE)} />
+      </View>
 
       <SectionTitle>Direct checks</SectionTitle>
       <Text style={styles.body}>
@@ -54,34 +54,33 @@ export default function AboutScreen(): React.JSX.Element {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles(({ c }) => ({
   body: {
-    color: '#334155',
-    fontSize: 14,
-    lineHeight: 21,
-    marginBottom: 8,
+    ...type.body,
+    color: c.ink,
+    marginBottom: space[2],
   },
   container: {
-    padding: 16,
-    paddingBottom: 32,
+    padding: space[4],
+    paddingBottom: space[8],
   },
-  link: {
-    color: '#1d4ed8',
-    fontSize: 14,
-    fontWeight: '600',
-    marginBottom: 4,
+  links: {
+    gap: space[2],
+  },
+  screen: {
+    backgroundColor: c.ground,
   },
   spacer: {
-    height: 16,
+    height: space[4],
   },
   title: {
-    fontSize: 22,
-    fontWeight: '800',
-    marginBottom: 8,
+    ...type.display,
+    color: c.ink,
+    marginBottom: space[2],
   },
   version: {
-    color: '#94a3b8',
-    fontSize: 12,
-    marginTop: 16,
+    ...type.meta,
+    color: c.inkMuted,
+    marginTop: space[6],
   },
-});
+}));
