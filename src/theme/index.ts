@@ -34,6 +34,12 @@ const light = {
   switchThumb: '#ffffff',
   marker: '#f2e4b8',
   focus: '#3e5c7e',
+  // Hover (web): a faint warm wash, like the Claude app. Rows on surface get
+  // `hoverRow`; ghost buttons on ground and chips get `hoverWash`.
+  hoverRow: '#f7f6f2',
+  hoverWash: '#e3e1d9',
+  tintHover: '#344f6d',
+  tintSoftHover: '#d6dde6',
   logoGround: '#ffffff',
   gradeA: '#4a6a8a',
   onGradeA: '#ffffff',
@@ -73,6 +79,10 @@ const dark: Palette = {
   switchThumb: '#ffffff',
   marker: '#544a2a',
   focus: '#9db4cf',
+  hoverRow: '#31302d',
+  hoverWash: '#403f3b',
+  tintHover: '#b1c4da',
+  tintSoftHover: '#36404d',
   logoGround: '#ffffff',
   gradeA: '#7795b3',
   onGradeA: '#141413',

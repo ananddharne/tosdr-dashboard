@@ -7,7 +7,18 @@ import { useStore, followKey } from '../state/store';
 import { approvedPoints, type TosdrServiceDetail } from '../api/tosdr';
 import { CONCERNS } from '../utils/concerns';
 import { aiSummaryLine, deriveAiLens, gradeRank } from '../utils/grades';
-import { Button, Chip, ChipRow, SectionTitle, ServiceRow, Switch, ThemeToggle, useListItemStyle } from '../components/ui';
+import {
+  Button,
+  Chip,
+  ChipRow,
+  SectionTitle,
+  ServiceRow,
+  Switch,
+  ThemeToggle,
+  useGhostPress,
+  useListItemStyle,
+  useRowPress,
+} from '../components/ui';
 import { logoForFollow } from '../utils/logos';
 import { hairline, makeStyles, radius, size, space, type, useTheme } from '../theme';
 import type { FollowedService } from '../services/storage';
@@ -20,6 +31,8 @@ export default function DashboardScreen(): React.JSX.Element {
   const { c } = useTheme();
   const styles = useStyles();
   const listItemStyle = useListItemStyle();
+  const ghostPress = useGhostPress();
+  const rowPress = useRowPress();
   const [details, setDetails] = useState<Record<number, TosdrServiceDetail>>({});
   const [refreshing, setRefreshing] = useState(false);
   const [lastRefresh, setLastRefresh] = useState<string | null>(null);
@@ -30,13 +43,13 @@ export default function DashboardScreen(): React.JSX.Element {
         // On web the header adds no inset; match the content gutter.
         <View style={[styles.headerActions, Platform.OS === 'web' && { marginRight: space[4] }]}>
           <ThemeToggle />
-          <Pressable onPress={() => navigation.navigate('About')} accessibilityRole="link" hitSlop={8}>
-            {({ pressed }) => <Text style={[styles.navAction, pressed && styles.navActionPressed]}>About</Text>}
+          <Pressable onPress={() => navigation.navigate('About')} accessibilityRole="link" hitSlop={8} style={ghostPress}>
+            <Text style={styles.navAction}>About</Text>
           </Pressable>
         </View>
       ),
     });
-  }, [navigation, styles]);
+  }, [navigation, styles, ghostPress]);
 
   const loadDetails = useCallback(async () => {
     for (const follow of store.follows) {
@@ -143,8 +156,8 @@ export default function DashboardScreen(): React.JSX.Element {
             <Pressable
               onPress={() => navigation.navigate('ChangeFeed')}
               accessibilityRole="button"
-              android_ripple={Platform.OS === 'android' ? { color: c.surfaceSunk } : undefined}
-              style={({ pressed }) => [styles.groupRowPress, Platform.OS !== 'android' && pressed && styles.groupRowPressed]}
+              android_ripple={rowPress.android_ripple}
+              style={(state) => [styles.groupRowPress, rowPress.stateStyle(state)]}
             >
               <View style={styles.groupRow}>
                 <Text style={styles.groupLabel}>Changes</Text>
@@ -253,9 +266,6 @@ const useStyles = makeStyles(({ c }) => ({
   groupRowPress: {
     backgroundColor: c.surface,
   },
-  groupRowPressed: {
-    backgroundColor: c.surfaceSunk,
-  },
   groupRowSeparator: {
     borderBottomColor: c.line,
     borderBottomWidth: hairline,
@@ -288,9 +298,6 @@ const useStyles = makeStyles(({ c }) => ({
   navAction: {
     ...type.body,
     color: c.link,
-  },
-  navActionPressed: {
-    opacity: 0.6,
   },
   refreshNote: {
     ...type.footnote,

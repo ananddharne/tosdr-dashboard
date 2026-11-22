@@ -8,7 +8,7 @@ import { approvedPoints, type TosdrServiceDetail } from '../api/tosdr';
 import { answerQuestion, SUGGESTED_QUESTIONS, type ChatAnswer } from '../services/chat';
 import { askLlmChat, isLlmChatConfigured } from '../services/llmChat';
 import { useStore } from '../state/store';
-import { Button, Chip, Note, TextField } from '../components/ui';
+import { Button, Chip, Note, TextField, webInteractive, type PressState } from '../components/ui';
 import { makeStyles, radius, space, type, useTheme } from '../theme';
 
 type Nav = NativeStackNavigationProp<RootStackParamList>;
@@ -187,8 +187,16 @@ export default function ChatScreen(): React.JSX.Element {
                       <Text style={styles.quoteCase}>{quote.caseTitle}</Text>
                       {quote.analysis !== '' && <Text style={styles.quoteAnalysis}>{quote.analysis}</Text>}
                       {quote.source !== '' && (
-                        <Pressable onPress={() => void Linking.openURL(quote.source)} accessibilityRole="link">
-                          <Text style={styles.sourceLink}>Source ↗</Text>
+                        <Pressable
+                          onPress={() => void Linking.openURL(quote.source)}
+                          accessibilityRole="link"
+                          style={webInteractive}
+                        >
+                          {(state) => (
+                            <Text style={[styles.sourceLink, (state as PressState).hovered && styles.sourceLinkHovered]}>
+                              Source ↗
+                            </Text>
+                          )}
                         </Pressable>
                       )}
                     </View>
@@ -329,6 +337,9 @@ const useStyles = makeStyles(({ c }) => ({
   quoteTitle: {
     ...type.bodySmBold,
     color: c.ink,
+  },
+  sourceLinkHovered: {
+    color: c.tintHover,
   },
   sourceLink: {
     ...type.meta,

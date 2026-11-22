@@ -6,7 +6,8 @@ import { useFonts } from 'expo-font';
 import { Inter_400Regular, Inter_500Medium, Inter_600SemiBold, Inter_700Bold } from '@expo-google-fonts/inter';
 import { StoreProvider } from './src/state/store';
 import type { RootStackParamList } from './src/navigation/types';
-import { fonts, space, useTheme } from './src/theme';
+import { fonts, radius, space, useTheme } from './src/theme';
+import { webInteractive, type PressState } from './src/components/ui';
 import DashboardScreen from './src/screens/DashboardScreen';
 import AddAppsScreen from './src/screens/AddAppsScreen';
 import ServiceDetailScreen from './src/screens/ServiceDetailScreen';
@@ -74,8 +75,22 @@ export default function App(): React.JSX.Element | null {
                         accessibilityLabel={`Back to ${label ?? 'previous screen'}`}
                         hitSlop={10}
                         // On web the header adds no inset, so the button sat on
-                        // the window edge. Line it up with the content gutter.
-                        style={Platform.OS === 'web' ? { marginLeft: space[4] } : undefined}
+                        // the window edge. Line the label up with the content
+                        // gutter; the padding is room for the hover wash.
+                        style={(state) =>
+                          Platform.OS === 'web'
+                            ? [
+                                {
+                                  borderRadius: radius.sm,
+                                  marginLeft: space[4] - space[2],
+                                  paddingHorizontal: space[2],
+                                  paddingVertical: space[1],
+                                },
+                                webInteractive,
+                                (state as PressState).hovered && { backgroundColor: c.hoverWash },
+                              ]
+                            : undefined
+                        }
                       >
                         {({ pressed }) => (
                           <Text
