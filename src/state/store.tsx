@@ -1,6 +1,6 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { getService, type TosdrServiceDetail } from '../api/tosdr';
-import type { DirectCheckResult } from '../api/directCheck';
+import { normalizeSiteUrl, runDirectCheck, type DirectCheckResult } from '../api/directCheck';
 import { refreshFollowed } from '../services/changeFeed';
 import {
   storage,
@@ -18,6 +18,8 @@ interface StoreValue {
   changes: ChangeEntry[];
   unreadChanges: number;
   directChecks: Record<string, DirectCheckResult>;
+  // Direct checks running in the background (memory only: a reload drops them).
+  pendingChecks: Record<string, PendingCheck>;
   serviceCache: Record<number, TosdrServiceDetail>;
   followService: (service: Omit<FollowedService, 'addedAt'>) => void;
   unfollowService: (key: string) => void;
@@ -27,7 +29,20 @@ interface StoreValue {
   getServiceDetail: (serviceId: number) => Promise<TosdrServiceDetail | null>;
   refreshAll: () => Promise<{ newChanges: number; failures: string[] }>;
   saveDirectCheck: (result: DirectCheckResult) => void;
+  /**
+   * Start a direct check in the background and return its id right away.
+   * Pass `id` to re-check an existing entry in place (keeps follows linked).
+   */
+  startDirectCheck: (name: string, siteUrl: string, opts?: { id?: string; fresh?: boolean }) => string;
   markChangesRead: () => void;
+}
+
+export interface PendingCheck {
+  id: string;
+  name: string;
+  siteUrl: string; // normalized, e.g. https://example.com
+  startedAt: string;
+  error?: string; // set when the check failed; the entry stays until retried
 }
 
 const StoreContext = createContext<StoreValue | null>(null);
@@ -44,6 +59,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }): Reac
   const [changes, setChanges] = useState<ChangeEntry[]>([]);
   const [unreadChanges, setUnreadChanges] = useState(0);
   const [directChecks, setDirectChecks] = useState<Record<string, DirectCheckResult>>({});
+  const [pendingChecks, setPendingChecks] = useState<Record<string, PendingCheck>>({});
   const [serviceCache, setServiceCache] = useState<Record<number, TosdrServiceDetail>>({});
 
   useEffect(() => {
@@ -147,6 +163,47 @@ export function StoreProvider({ children }: { children: React.ReactNode }): Reac
     });
   }, []);
 
+  const startDirectCheck = useCallback(
+    (name: string, siteUrlInput: string, opts: { id?: string; fresh?: boolean } = {}): string => {
+      const siteUrl = normalizeSiteUrl(siteUrlInput); // throws on a bad address
+      const id = opts.id ?? `direct-${Date.now()}`;
+      setPendingChecks((prev) => ({
+        ...prev,
+        [id]: { id, name: name.trim(), siteUrl, startedAt: new Date().toISOString() },
+      }));
+      void (async () => {
+        try {
+          const result = { ...(await runDirectCheck(name, siteUrl, { fresh: opts.fresh })), id };
+          setDirectChecks((prev) => {
+            const next = { ...prev, [id]: result };
+            void storage.saveDirectChecks(next);
+            return next;
+          });
+          // A followed entry shows the new grade on the dashboard.
+          setFollows((prev) => {
+            if (!prev.some((f) => f.directCheckId === id)) {
+              return prev;
+            }
+            const next = prev.map((f) =>
+              f.directCheckId === id ? { ...f, rating: result.rating?.grade ?? 'UNRATED' } : f,
+            );
+            void storage.saveFollows(next);
+            return next;
+          });
+          setPendingChecks((prev) => {
+            const { [id]: _done, ...rest } = prev;
+            return rest;
+          });
+        } catch (err) {
+          const message = err instanceof Error ? err.message : 'Direct check failed.';
+          setPendingChecks((prev) => (prev[id] ? { ...prev, [id]: { ...prev[id], error: message } } : prev));
+        }
+      })();
+      return id;
+    },
+    [],
+  );
+
   const markChangesRead = useCallback(() => setUnreadChanges(0), []);
 
   const value = useMemo<StoreValue>(
@@ -158,6 +215,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }): Reac
       changes,
       unreadChanges,
       directChecks,
+      pendingChecks,
       serviceCache,
       followService,
       unfollowService,
@@ -167,6 +225,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }): Reac
       getServiceDetail,
       refreshAll,
       saveDirectCheck,
+      startDirectCheck,
       markChangesRead,
     }),
     [
@@ -177,6 +236,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }): Reac
       changes,
       unreadChanges,
       directChecks,
+      pendingChecks,
       serviceCache,
       followService,
       unfollowService,
@@ -186,6 +246,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }): Reac
       getServiceDetail,
       refreshAll,
       saveDirectCheck,
+      startDirectCheck,
       markChangesRead,
     ],
   );

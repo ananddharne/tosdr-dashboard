@@ -1,12 +1,12 @@
-import React, { useMemo, useState } from 'react';
+import React, { useState } from 'react';
 import { ActivityIndicator, Linking, ScrollView, Text, View } from 'react-native';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { RouteProp } from '@react-navigation/native';
 import type { RootStackParamList } from '../navigation/types';
 import { searchServices, type TosdrSearchService } from '../api/tosdr';
-import { normalizeSiteUrl, runDirectCheck, type DirectCheckResult } from '../api/directCheck';
-import { useStore, followKey } from '../state/store';
+import { normalizeSiteUrl, type DirectCheckResult } from '../api/directCheck';
+import { useStore } from '../state/store';
 import { Button, ClauseQuote, GradeBadge, Link, Note, SectionTitle, TextField } from '../components/ui';
 import { ServiceLogo } from '../components/ServiceLogo';
 import { tosdrLogoUrl } from '../utils/logos';
@@ -19,9 +19,10 @@ type Phase =
   | { kind: 'form' }
   | { kind: 'searching' }
   | { kind: 'rated'; results: TosdrSearchService[] }
-  | { kind: 'fetching' }
-  | { kind: 'done'; result: DirectCheckResult }
+  | { kind: 'check'; id: string } // a running or finished direct check
   | { kind: 'error'; message: string };
+
+const bareSite = (url: string) => url.replace(/^https?:\/\//, '');
 
 export default function DirectCheckScreen(): React.JSX.Element {
   const navigation = useNavigation<Nav>();
@@ -29,32 +30,24 @@ export default function DirectCheckScreen(): React.JSX.Element {
   const store = useStore();
   const { c } = useTheme();
   const styles = useStyles();
-  const existing = route.params.directCheckId ? store.directChecks[route.params.directCheckId] : undefined;
+  const routeId = route.params.directCheckId;
+  const existing = routeId ? store.directChecks[routeId] : undefined;
 
   const [name, setName] = useState(existing?.name ?? '');
   const [siteUrl, setSiteUrl] = useState(existing?.siteUrl ?? '');
-  const [phase, setPhase] = useState<Phase>(
-    existing ? { kind: 'done', result: existing } : { kind: 'form' },
-  );
+  const [phase, setPhase] = useState<Phase>(routeId ? { kind: 'check', id: routeId } : { kind: 'form' });
 
-  const isFollowingDirect = useMemo(() => {
-    if (phase.kind !== 'done') {
-      return false;
-    }
-    return store.follows.some((f) => f.source === 'direct' && f.directCheckId === phase.result.id);
-  }, [phase, store.follows]);
+  const isFollowing = (id: string) => store.follows.some((f) => f.source === 'direct' && f.directCheckId === id);
 
-  /** A check of this site already saved on this device, newest first. */
-  const savedCheckFor = (input: string): DirectCheckResult | undefined => {
-    let site: string;
-    try {
-      site = normalizeSiteUrl(input);
-    } catch {
-      return undefined;
+  /** A check of this site on this device (running, or saved), newest first. */
+  const knownCheckFor = (site: string): string | undefined => {
+    const running = Object.values(store.pendingChecks).find((p) => p.siteUrl === site && !p.error);
+    if (running) {
+      return running.id;
     }
     return Object.values(store.directChecks)
-      .filter((c) => c.siteUrl === site)
-      .sort((a, b) => b.fetchedAt.localeCompare(a.fetchedAt))[0];
+      .filter((r) => r.siteUrl === site)
+      .sort((a, b) => b.fetchedAt.localeCompare(a.fetchedAt))[0]?.id;
   };
 
   const start = async () => {
@@ -62,15 +55,22 @@ export default function DirectCheckScreen(): React.JSX.Element {
       setPhase({ kind: 'error', message: 'Enter the service name first.' });
       return;
     }
-    // Already checked this site: show that instead of paying to grade it
-    // again. "Check again" on the result runs a fresh check.
-    const saved = savedCheckFor(siteUrl);
-    if (saved) {
-      setPhase({ kind: 'done', result: saved });
+    let site: string;
+    try {
+      site = normalizeSiteUrl(siteUrl);
+    } catch (err) {
+      setPhase({ kind: 'error', message: err instanceof Error ? err.message : 'Check the website address.' });
       return;
     }
-    // Step 1: always check ToS;DR first. If it rates the service, offer
-    // the rated record instead of duplicating it with a direct check.
+    // Already checked (or checking) this site: show that instead of paying
+    // to grade it again. "Check again" on the result runs a fresh check.
+    const known = knownCheckFor(site);
+    if (known) {
+      setPhase({ kind: 'check', id: known });
+      return;
+    }
+    // Always check ToS;DR first. If it rates the service, offer the rated
+    // record instead of duplicating it with a direct check.
     setPhase({ kind: 'searching' });
     try {
       const results = await searchServices(name);
@@ -79,57 +79,83 @@ export default function DirectCheckScreen(): React.JSX.Element {
         return;
       }
     } catch {
-      // Search failure must not block the direct fetch; fall through.
+      // Search failure must not block the direct check; fall through.
     }
-    // Step 2: not rated (or search unreachable) — fetch the site itself.
-    setPhase({ kind: 'fetching' });
-    try {
-      const result = await runDirectCheck(name, siteUrl);
-      store.saveDirectCheck(result);
-      setPhase({ kind: 'done', result });
-    } catch (err) {
-      setPhase({ kind: 'error', message: err instanceof Error ? err.message : 'Direct check failed.' });
-    }
+    // Not rated: show the app now and grade it in the background.
+    setPhase({ kind: 'check', id: store.startDirectCheck(name, site) });
   };
 
-  const checkAgain = async (previous: DirectCheckResult) => {
-    setPhase({ kind: 'fetching' });
-    try {
-      const result = await runDirectCheck(previous.name, previous.siteUrl, { fresh: true });
-      // Keep the id so the dashboard entry follows the new result.
-      const updated = { ...result, id: previous.id };
-      store.saveDirectCheck(updated);
-      setPhase({ kind: 'done', result: updated });
-    } catch (err) {
-      setPhase({ kind: 'error', message: err instanceof Error ? err.message : 'Direct check failed.' });
-    }
-  };
-
-  const addToMyApps = (result: DirectCheckResult) => {
+  const addToMyApps = (id: string, appName: string, site: string, grade?: string) => {
     store.followService({
       serviceId: null,
-      name: result.name,
-      slug: result.siteUrl.replace(/^https?:\/\//, ''),
-      rating: result.rating?.grade ?? 'UNRATED',
+      name: appName,
+      slug: bareSite(site),
+      rating: grade ?? 'UNRATED',
       source: 'direct',
-      directCheckId: result.id,
+      directCheckId: id,
     });
   };
 
-  const busy = phase.kind === 'searching' || phase.kind === 'fetching';
+  const renderIdentity = (appName: string, site: string, iconUrl: string | undefined, badge?: React.ReactNode) => (
+    <View style={styles.identity}>
+      <ServiceLogo name={appName} uri={iconUrl} size="lg" />
+      <View style={styles.identityText}>
+        <Text style={styles.name} accessibilityRole="header">
+          {appName}
+        </Text>
+        <Text style={styles.meta}>{bareSite(site)}</Text>
+      </View>
+      {badge}
+    </View>
+  );
+
+  const renderFollowButton = (id: string, appName: string, site: string, grade?: string) =>
+    !isFollowing(id) ? (
+      <Button
+        label="Add to your apps"
+        onPress={() => addToMyApps(id, appName, site, grade)}
+        style={styles.primaryAction}
+      />
+    ) : (
+      <Text style={styles.following}>✓ In your apps</Text>
+    );
+
+  /** Shown the moment a check starts; the grade fills in when it's done. */
+  const renderPending = (id: string, appName: string, site: string, error?: string) => (
+    <View>
+      {renderIdentity(appName, site, store.directChecks[id]?.iconUrl)}
+      {error ? (
+        <View style={styles.errorBox}>
+          <Text style={styles.errorText}>{error}</Text>
+          <Button
+            label="Try again"
+            variant="secondary"
+            onPress={() => store.startDirectCheck(appName, site, { id, fresh: true })}
+          />
+        </View>
+      ) : (
+        <View style={styles.progress} accessibilityLiveRegion="polite">
+          <ActivityIndicator color={c.tint} />
+          <View style={styles.progressText}>
+            <Text style={styles.progressTitle}>Reading the policies and grading…</Text>
+            <Text style={styles.meta}>
+              Usually 1–2 minutes. You can leave this screen; it keeps going and your apps list updates when it's done.
+            </Text>
+          </View>
+        </View>
+      )}
+      {renderFollowButton(id, appName, site)}
+    </View>
+  );
 
   const renderResult = (result: DirectCheckResult) => (
     <View>
-      <View style={styles.identity}>
-        <ServiceLogo name={result.name} uri={result.iconUrl} size="lg" />
-        <View style={styles.identityText}>
-          <Text style={styles.name} accessibilityRole="header">
-            {result.name}
-          </Text>
-          <Text style={styles.meta}>{result.siteUrl.replace(/^https?:\/\//, '')}</Text>
-        </View>
-        <GradeBadge grade={result.rating && result.rating.grade !== 'N/A' ? result.rating.grade : '?'} large />
-      </View>
+      {renderIdentity(
+        result.name,
+        result.siteUrl,
+        result.iconUrl,
+        <GradeBadge grade={result.rating && result.rating.grade !== 'N/A' ? result.rating.grade : '?'} large />,
+      )}
       <Text style={styles.resultMeta}>
         {`${result.rating ? 'Estimated grade · not reviewed by ToS;DR' : 'Unrated · direct check'} · ${new Date(result.fetchedAt).toLocaleDateString(undefined, {
           day: 'numeric',
@@ -138,11 +164,7 @@ export default function DirectCheckScreen(): React.JSX.Element {
         })} · ${result.fetchedUrls.length} page${result.fetchedUrls.length === 1 ? '' : 's'} read`}
       </Text>
 
-      {!isFollowingDirect ? (
-        <Button label="Add to your apps" onPress={() => addToMyApps(result)} style={styles.primaryAction} />
-      ) : (
-        <Text style={styles.following}>✓ In your apps</Text>
-      )}
+      {renderFollowButton(result.id, result.name, result.siteUrl, result.rating?.grade)}
 
       {result.rating && (
         <>
@@ -160,7 +182,7 @@ export default function DirectCheckScreen(): React.JSX.Element {
               title={point.caseTitle}
               body={point.quote}
               verbatim
-              sourceLabel={point.sourceUrl.replace(/^https?:\/\//, '')}
+              sourceLabel={bareSite(point.sourceUrl)}
               onPressSource={() => void Linking.openURL(point.sourceUrl)}
             />
           ))}
@@ -181,16 +203,17 @@ export default function DirectCheckScreen(): React.JSX.Element {
       {!result.rating && result.findings.length === 0 && (
         <Note>None of the checked topics came up in the pages we could read.</Note>
       )}
-      {!result.rating && result.findings.map((finding, i) => (
-        <ClauseQuote
-          key={`${finding.topic}-${i}`}
-          title={finding.topic}
-          body={finding.quote}
-          verbatim
-          sourceLabel={finding.sourceUrl.replace(/^https?:\/\//, '')}
-          onPressSource={() => void Linking.openURL(finding.sourceUrl)}
-        />
-      ))}
+      {!result.rating &&
+        result.findings.map((finding, i) => (
+          <ClauseQuote
+            key={`${finding.topic}-${i}`}
+            title={finding.topic}
+            body={finding.quote}
+            verbatim
+            sourceLabel={bareSite(finding.sourceUrl)}
+            onPressSource={() => void Linking.openURL(finding.sourceUrl)}
+          />
+        ))}
 
       {!result.rating && result.notStatedTopics.length > 0 && (
         <>
@@ -204,17 +227,17 @@ export default function DirectCheckScreen(): React.JSX.Element {
       <SectionTitle>Pages read</SectionTitle>
       <View style={styles.sources}>
         {result.fetchedUrls.map((url) => (
-          <Link key={url} label={`${url.replace(/^https?:\/\//, '')} ↗`} onPress={() => void Linking.openURL(url)} />
+          <Link key={url} label={`${bareSite(url)} ↗`} onPress={() => void Linking.openURL(url)} />
         ))}
       </View>
       {result.failedUrls.length > 0 && (
-        <Text style={styles.failed}>{`Couldn't read: ${result.failedUrls.map((u) => u.replace(/^https?:\/\//, '')).join(', ')}`}</Text>
+        <Text style={styles.failed}>{`Couldn't read: ${result.failedUrls.map(bareSite).join(', ')}`}</Text>
       )}
 
       <Button
         label="Check again"
         variant="secondary"
-        onPress={() => void checkAgain(result)}
+        onPress={() => store.startDirectCheck(result.name, result.siteUrl, { id: result.id, fresh: true })}
         style={styles.primaryAction}
       />
 
@@ -231,9 +254,33 @@ export default function DirectCheckScreen(): React.JSX.Element {
     </View>
   );
 
+  /** A running check wins over an older saved result (that's "Check again"). */
+  const renderCheck = (id: string) => {
+    const pending = store.pendingChecks[id];
+    if (pending) {
+      return renderPending(id, pending.name, pending.siteUrl, pending.error);
+    }
+    const result = store.directChecks[id];
+    if (result) {
+      return renderResult(result);
+    }
+    // Followed, but the check never finished (the page was reloaded mid-check).
+    const follow = store.follows.find((f) => f.directCheckId === id);
+    if (follow) {
+      const site = `https://${follow.slug}`;
+      return renderPending(
+        id,
+        follow.name,
+        site,
+        "This check didn't finish, probably because the page was reloaded. Try again to grade it.",
+      );
+    }
+    return <Note>This check isn't available anymore.</Note>;
+  };
+
   return (
     <ScrollView style={styles.screen} contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
-      {phase.kind !== 'done' && (
+      {phase.kind !== 'check' && (
         <View style={styles.form}>
           <Text style={styles.title} accessibilityRole="header">
             Check an app directly
@@ -261,12 +308,11 @@ export default function DirectCheckScreen(): React.JSX.Element {
             accessibilityLabel="Website"
           />
           <Button
-            label={phase.kind === 'searching' ? 'Checking ToS;DR…' : phase.kind === 'fetching' ? 'Reading and grading (up to 2 min)…' : 'Check this app'}
+            label={phase.kind === 'searching' ? 'Checking ToS;DR…' : 'Check this app'}
             onPress={() => void start()}
-            disabled={busy}
+            disabled={phase.kind === 'searching'}
             style={styles.primaryAction}
           />
-          {busy && <ActivityIndicator style={styles.spinner} color={c.tint} />}
         </View>
       )}
 
@@ -318,7 +364,7 @@ export default function DirectCheckScreen(): React.JSX.Element {
         </>
       )}
 
-      {phase.kind === 'done' && renderResult(phase.result)}
+      {phase.kind === 'check' && renderCheck(phase.id)}
 
       {phase.kind === 'error' && (
         <View style={styles.errorBox}>
@@ -392,6 +438,23 @@ const useStyles = makeStyles(({ c }) => ({
   primaryAction: {
     marginTop: space[4],
   },
+  progress: {
+    alignItems: 'center',
+    backgroundColor: c.surface,
+    borderRadius: radius.md,
+    flexDirection: 'row',
+    gap: space[3],
+    marginTop: space[4],
+    padding: space[4],
+  },
+  progressText: {
+    flex: 1,
+    gap: 2,
+  },
+  progressTitle: {
+    ...type.bodySmBold,
+    color: c.ink,
+  },
   ratedList: {
     backgroundColor: c.surface,
     borderRadius: radius.md,
@@ -422,9 +485,6 @@ const useStyles = makeStyles(({ c }) => ({
   },
   sources: {
     gap: space[2],
-  },
-  spinner: {
-    marginTop: space[3],
   },
   title: {
     ...type.title,

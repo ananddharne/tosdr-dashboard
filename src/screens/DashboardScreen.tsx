@@ -27,7 +27,13 @@ export default function DashboardScreen(): React.JSX.Element {
   useLayoutEffect(() => {
     navigation.setOptions({
       headerRight: () => (
-        <Pressable onPress={() => navigation.navigate('About')} accessibilityRole="link" hitSlop={8}>
+        <Pressable
+          onPress={() => navigation.navigate('About')}
+          accessibilityRole="link"
+          hitSlop={8}
+          // On web the header adds no inset; match the content gutter.
+          style={Platform.OS === 'web' ? { marginRight: space[4] } : undefined}
+        >
           {({ pressed }) => <Text style={[styles.navAction, pressed && styles.navActionPressed]}>About</Text>}
         </Pressable>
       ),
@@ -65,8 +71,15 @@ export default function DashboardScreen(): React.JSX.Element {
 
   const summaryFor = (follow: FollowedService): string => {
     if (follow.source === 'direct') {
+      const pending = follow.directCheckId ? store.pendingChecks[follow.directCheckId] : undefined;
+      if (pending) {
+        return pending.error ? "Check didn't finish · tap to retry" : 'Grading… usually 1–2 min';
+      }
       const check = follow.directCheckId ? store.directChecks[follow.directCheckId] : undefined;
-      return check?.rating ? 'Estimated · not reviewed by ToS;DR' : 'Unrated · direct check';
+      if (!check) {
+        return "Check didn't finish · tap to retry";
+      }
+      return check.rating ? 'Estimated · not reviewed by ToS;DR' : 'Unrated · direct check';
     }
     const detail = follow.serviceId !== null ? details[follow.serviceId] : undefined;
     if (!detail) {
@@ -162,6 +175,11 @@ export default function DashboardScreen(): React.JSX.Element {
           name={item.name}
           logoUri={logoForFollow(item, store.directChecks)}
           grade={item.rating === 'UNRATED' ? '?' : item.rating}
+          pending={
+            item.directCheckId !== undefined &&
+            store.pendingChecks[item.directCheckId] !== undefined &&
+            !store.pendingChecks[item.directCheckId].error
+          }
           summary={summaryFor(item)}
           onPress={() => {
             if (item.source === 'tosdr' && item.serviceId !== null) {

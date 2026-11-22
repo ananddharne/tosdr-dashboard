@@ -1,5 +1,6 @@
 import React from 'react';
 import {
+  ActivityIndicator,
   Platform,
   Pressable,
   Text,
@@ -295,10 +296,25 @@ export function useListItemStyle(): (index: number, count: number, insetSeparato
   ];
 }
 
+/** Same footprint as a small GradeBadge, with a spinner inside. */
+function PendingBadge(): React.JSX.Element {
+  const { c } = useTheme();
+  const styles = useStyles();
+  return (
+    <View
+      style={[styles.badge, { width: size.badgeSm, height: size.badgeSm, backgroundColor: c.surfaceSunk }]}
+      accessibilityLabel="Grading"
+    >
+      <ActivityIndicator size="small" color={c.inkMuted} />
+    </View>
+  );
+}
+
 export function ServiceRow({
   name,
   logoUri,
   grade,
+  pending = false,
   summary,
   onPress,
   separator = false,
@@ -307,6 +323,8 @@ export function ServiceRow({
   name: string;
   logoUri?: string;
   grade: string;
+  /** Still being graded: a spinner stands in for the grade badge. */
+  pending?: boolean;
   summary?: string;
   onPress?: () => void;
   /** Draw the hairline under this row, inset to the text. Off for the last row. */
@@ -330,7 +348,7 @@ export function ServiceRow({
           </Text>
           {summary !== undefined && <Text style={styles.rowSummary}>{summary}</Text>}
         </View>
-        <GradeBadge grade={grade} />
+        {pending ? <PendingBadge /> : <GradeBadge grade={grade} />}
         <Text style={styles.chevron}>›</Text>
       </View>
     </Pressable>

@@ -6,7 +6,7 @@ import { useFonts } from 'expo-font';
 import { Inter_400Regular, Inter_500Medium, Inter_600SemiBold, Inter_700Bold } from '@expo-google-fonts/inter';
 import { StoreProvider } from './src/state/store';
 import type { RootStackParamList } from './src/navigation/types';
-import { fonts, useTheme } from './src/theme';
+import { fonts, space, useTheme } from './src/theme';
 import DashboardScreen from './src/screens/DashboardScreen';
 import AddAppsScreen from './src/screens/AddAppsScreen';
 import ServiceDetailScreen from './src/screens/ServiceDetailScreen';
@@ -73,6 +73,9 @@ export default function App(): React.JSX.Element | null {
                         accessibilityRole="button"
                         accessibilityLabel={`Back to ${label ?? 'previous screen'}`}
                         hitSlop={10}
+                        // On web the header adds no inset, so the button sat on
+                        // the window edge. Line it up with the content gutter.
+                        style={Platform.OS === 'web' ? { marginLeft: space[4] } : undefined}
                       >
                         {({ pressed }) => (
                           <Text
