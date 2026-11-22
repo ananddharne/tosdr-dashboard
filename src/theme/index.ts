@@ -1,89 +1,95 @@
-import { useMemo } from 'react';
+import { useMemo, useSyncExternalStore } from 'react';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { StyleSheet, useColorScheme, type TextStyle } from 'react-native';
 
 // Clause design tokens, mirrored from the design system's tokens.json
 // (https://claude.ai/artifact/Pvr3shFeqoSFfMpL84TH2G). Change values there
 // first, then here, so the two stay in step.
 //
-// The look: grouped white lists on a grey ground, large bold titles, one blue
-// `tint` for actions, Inter on every platform so iPhone and Android match.
+// The look: grouped white lists on a warm grey ground, large bold titles, one
+// muted blue `tint` for actions, Inter on every platform so iPhone and
+// Android match. Light and dark follow the device unless the person picks
+// one with the light/dark button (useAppearance below).
 // Every colour in the app comes from a palette below. Screens never write
 // a literal colour; they read `t.c.<token>` through makeStyles().
 
+// Option B "warm neutrals + dusty-blue accent" (picked 2026-11-22 from
+// https://claude.ai/artifact/FyjG6Gcxkps6JidsCsx8b1): warm greys like the
+// Claude app, one quiet blue for actions, softened blue-to-orange grades.
 const light = {
-  ground: '#f2f2f7',
+  ground: '#f4f3ee',
   surface: '#ffffff',
-  surfaceSunk: '#e3e3e8',
-  line: '#c6c6c8',
-  lineStrong: '#86868b',
-  ink: '#000000',
-  inkMuted: '#6c6c70',
-  inkFaint: '#b4b4b8',
-  tint: '#0066d6',
+  surfaceSunk: '#eae8e1',
+  line: '#e3e1d9',
+  lineStrong: '#8c8a83',
+  ink: '#1f1e1d',
+  inkMuted: '#6b6a65',
+  inkFaint: '#b9b7b0',
+  tint: '#3e5c7e',
   onTint: '#ffffff',
-  tintSoft: '#dde9f8',
-  onTintSoft: '#0057b8',
-  link: '#0066d6',
-  switchOn: '#34c759',
+  tintSoft: '#e2e7ed',
+  onTintSoft: '#2f4a68',
+  link: '#3e5c7e',
+  switchOn: '#6f9472',
   switchThumb: '#ffffff',
-  marker: '#fff3b0',
-  focus: '#0066d6',
+  marker: '#f2e4b8',
+  focus: '#3e5c7e',
   logoGround: '#ffffff',
-  gradeA: '#1f5c96',
+  gradeA: '#4a6a8a',
   onGradeA: '#ffffff',
-  gradeB: '#7fb3dc',
-  onGradeB: '#161c1f',
-  gradeC: '#c4c9c5',
-  onGradeC: '#161c1f',
-  gradeD: '#eaa54e',
-  onGradeD: '#161c1f',
-  gradeE: '#ad451d',
+  gradeB: '#9fb4c7',
+  onGradeB: '#1f1e1d',
+  gradeC: '#cfccc3',
+  onGradeC: '#1f1e1d',
+  gradeD: '#d9a86e',
+  onGradeD: '#1f1e1d',
+  gradeE: '#a95f3f',
   onGradeE: '#ffffff',
-  gradeNa: '#e3e3e8',
-  onGradeNa: '#3c3c43',
-  pointGood: '#1f5c96',
-  pointBad: '#a8431c',
-  pointBlocker: '#7d2612',
-  pointNeutral: '#6c6c70',
+  gradeNa: '#eae8e1',
+  onGradeNa: '#4a4945',
+  pointGood: '#4a6a8a',
+  pointBad: '#9a5536',
+  pointBlocker: '#7a3a22',
+  pointNeutral: '#6b6a65',
 };
 
 export type Palette = typeof light;
 
 const dark: Palette = {
-  ground: '#000000',
-  surface: '#1c1c1e',
-  surfaceSunk: '#2c2c2e',
-  line: '#38383a',
-  lineStrong: '#8e8e93',
-  ink: '#ffffff',
-  inkMuted: '#98989f',
-  inkFaint: '#5a5a5f',
-  tint: '#0070e0',
-  onTint: '#ffffff',
-  tintSoft: '#10243d',
-  onTintSoft: '#6cb4ff',
-  link: '#4da3ff',
-  switchOn: '#30d158',
+  ground: '#1f1e1d',
+  surface: '#2a2927',
+  surfaceSunk: '#363531',
+  line: '#3a3935',
+  lineStrong: '#8f8c84',
+  ink: '#f2f0ea',
+  inkMuted: '#a3a19a',
+  inkFaint: '#66645e',
+  tint: '#9db4cf',
+  onTint: '#141413',
+  tintSoft: '#2d3440',
+  onTintSoft: '#bccbdd',
+  link: '#9db4cf',
+  switchOn: '#7fa382',
   switchThumb: '#ffffff',
-  marker: '#5c4f14',
-  focus: '#4da3ff',
+  marker: '#544a2a',
+  focus: '#9db4cf',
   logoGround: '#ffffff',
-  gradeA: '#4b8ccc',
-  onGradeA: '#0a1420',
-  gradeB: '#9cc6e8',
-  onGradeB: '#0a1420',
-  gradeC: '#8d9692',
-  onGradeC: '#0a1420',
-  gradeD: '#e8a456',
-  onGradeD: '#1a1004',
-  gradeE: '#d9693c',
-  onGradeE: '#1a0904',
-  gradeNa: '#2c2c2e',
-  onGradeNa: '#c7c7cc',
-  pointGood: '#8cc1f0',
-  pointBad: '#f0966c',
-  pointBlocker: '#ff8f75',
-  pointNeutral: '#98989f',
+  gradeA: '#7795b3',
+  onGradeA: '#141413',
+  gradeB: '#a9bccd',
+  onGradeB: '#141413',
+  gradeC: '#8f8c84',
+  onGradeC: '#141413',
+  gradeD: '#d2a46f',
+  onGradeD: '#141413',
+  gradeE: '#c77d5a',
+  onGradeE: '#141413',
+  gradeNa: '#363531',
+  onGradeNa: '#d6d3ca',
+  pointGood: '#9fb8d2',
+  pointBad: '#d9967a',
+  pointBlocker: '#e08a6e',
+  pointNeutral: '#a3a19a',
 };
 
 // Font family names are the keys App.tsx registers with useFonts(). With
@@ -139,9 +145,54 @@ const THEMES: Record<'light' | 'dark', Theme> = {
   dark: { scheme: 'dark', c: dark },
 };
 
-/** The active theme, following the phone's light/dark setting. */
+// --- Appearance: follow the device, or a light/dark choice ------------------
+//
+// 'system' until the person taps the light/dark button; their choice is
+// remembered on the device. Kept in a tiny module-level store (not React
+// context) so useTheme() works anywhere without a provider.
+
+export type Appearance = 'system' | 'light' | 'dark';
+
+const APPEARANCE_KEY = '@tosdr/appearance';
+let appearance: Appearance = 'system';
+const listeners = new Set<() => void>();
+
+function setAppearanceValue(next: Appearance): void {
+  appearance = next;
+  listeners.forEach((l) => l());
+}
+
+void AsyncStorage.getItem(APPEARANCE_KEY)
+  .then((saved) => {
+    if (saved === 'light' || saved === 'dark') {
+      setAppearanceValue(saved);
+    }
+  })
+  .catch(() => undefined);
+
+function subscribe(listener: () => void): () => void {
+  listeners.add(listener);
+  return () => listeners.delete(listener);
+}
+
+/** The person's choice and a setter that remembers it. */
+export function useAppearance(): { appearance: Appearance; setAppearance: (a: Appearance) => void } {
+  const value = useSyncExternalStore(subscribe, () => appearance, () => appearance);
+  return {
+    appearance: value,
+    setAppearance: (next: Appearance) => {
+      setAppearanceValue(next);
+      void AsyncStorage.setItem(APPEARANCE_KEY, next).catch(() => undefined);
+    },
+  };
+}
+
+/** The active theme: the person's light/dark choice, else the device's. */
 export function useTheme(): Theme {
-  return useColorScheme() === 'dark' ? THEMES.dark : THEMES.light;
+  const device = useColorScheme();
+  const { appearance: chosen } = useAppearance();
+  const scheme = chosen === 'system' ? (device === 'dark' ? 'dark' : 'light') : chosen;
+  return THEMES[scheme];
 }
 
 /**

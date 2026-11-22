@@ -7,7 +7,7 @@ import { useStore, followKey } from '../state/store';
 import { approvedPoints, type TosdrServiceDetail } from '../api/tosdr';
 import { CONCERNS } from '../utils/concerns';
 import { aiSummaryLine, deriveAiLens, gradeRank } from '../utils/grades';
-import { Button, Chip, ChipRow, SectionTitle, ServiceRow, Switch, useListItemStyle } from '../components/ui';
+import { Button, Chip, ChipRow, SectionTitle, ServiceRow, Switch, ThemeToggle, useListItemStyle } from '../components/ui';
 import { logoForFollow } from '../utils/logos';
 import { hairline, makeStyles, radius, size, space, type, useTheme } from '../theme';
 import type { FollowedService } from '../services/storage';
@@ -27,15 +27,13 @@ export default function DashboardScreen(): React.JSX.Element {
   useLayoutEffect(() => {
     navigation.setOptions({
       headerRight: () => (
-        <Pressable
-          onPress={() => navigation.navigate('About')}
-          accessibilityRole="link"
-          hitSlop={8}
-          // On web the header adds no inset; match the content gutter.
-          style={Platform.OS === 'web' ? { marginRight: space[4] } : undefined}
-        >
-          {({ pressed }) => <Text style={[styles.navAction, pressed && styles.navActionPressed]}>About</Text>}
-        </Pressable>
+        // On web the header adds no inset; match the content gutter.
+        <View style={[styles.headerActions, Platform.OS === 'web' && { marginRight: space[4] }]}>
+          <ThemeToggle />
+          <Pressable onPress={() => navigation.navigate('About')} accessibilityRole="link" hitSlop={8}>
+            {({ pressed }) => <Text style={[styles.navAction, pressed && styles.navActionPressed]}>About</Text>}
+          </Pressable>
+        </View>
       ),
     });
   }, [navigation, styles]);
@@ -196,6 +194,11 @@ export default function DashboardScreen(): React.JSX.Element {
 }
 
 const useStyles = makeStyles(({ c }) => ({
+  headerActions: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: space[3] + 2,
+  },
   actions: {
     flexDirection: 'row',
     gap: space[3] - 2,

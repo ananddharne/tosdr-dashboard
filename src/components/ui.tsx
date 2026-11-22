@@ -10,7 +10,8 @@ import {
   type TextInputProps,
   type ViewStyle,
 } from 'react-native';
-import { gradeColors, hairline, makeStyles, radius, size, space, type, useTheme } from '../theme';
+import Svg, { Circle, Path } from 'react-native-svg';
+import { gradeColors, hairline, makeStyles, radius, size, space, type, useAppearance, useTheme } from '../theme';
 import { ServiceLogo } from './ServiceLogo';
 
 // Clause components for React Native. Guidelines for each live in the
@@ -296,6 +297,40 @@ export function useListItemStyle(): (index: number, count: number, insetSeparato
   ];
 }
 
+// --- ThemeToggle -----------------------------------------------------------
+
+/**
+ * Round light/dark button. Shows a moon in light mode (tap for dark) and a
+ * sun in dark mode (tap for light). The choice is remembered on the device;
+ * until the first tap the app follows the device setting.
+ */
+export function ThemeToggle(): React.JSX.Element {
+  const { scheme, c } = useTheme();
+  const { setAppearance } = useAppearance();
+  const styles = useStyles();
+  const toDark = scheme === 'light';
+  return (
+    <Pressable
+      onPress={() => setAppearance(toDark ? 'dark' : 'light')}
+      accessibilityRole="button"
+      accessibilityLabel={toDark ? 'Switch to dark mode' : 'Switch to light mode'}
+      hitSlop={6}
+      style={({ pressed }) => [styles.themeToggle, pressed && { opacity: 0.6 }]}
+    >
+      <Svg width={18} height={18} viewBox="0 0 24 24" fill="none" stroke={c.ink} strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
+        {toDark ? (
+          <Path d="M20.5 14.5A8.5 8.5 0 0 1 9.5 3.5a8.5 8.5 0 1 0 11 11z" />
+        ) : (
+          <>
+            <Circle cx={12} cy={12} r={4} />
+            <Path d="M12 2.5v2M12 19.5v2M4.6 4.6l1.4 1.4M18 18l1.4 1.4M2.5 12h2M19.5 12h2M4.6 19.4L6 18M18 6l1.4-1.4" />
+          </>
+        )}
+      </Svg>
+    </Pressable>
+  );
+}
+
 /** Same footprint as a small GradeBadge, with a spinner inside. */
 function PendingBadge(): React.JSX.Element {
   const { c } = useTheme();
@@ -356,6 +391,14 @@ export function ServiceRow({
 }
 
 const useStyles = makeStyles(({ c }) => ({
+  themeToggle: {
+    alignItems: 'center',
+    backgroundColor: c.surfaceSunk,
+    borderRadius: radius.pill,
+    height: 36,
+    justifyContent: 'center',
+    width: 36,
+  },
   badge: {
     alignItems: 'center',
     borderRadius: radius.sm,
