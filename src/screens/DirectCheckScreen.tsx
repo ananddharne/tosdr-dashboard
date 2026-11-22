@@ -81,8 +81,12 @@ export default function DirectCheckScreen(): React.JSX.Element {
     } catch {
       // Search failure must not block the direct check; fall through.
     }
-    // Not rated: show the app now and grade it in the background.
-    setPhase({ kind: 'check', id: store.startDirectCheck(name, site) });
+    // Not rated: show the app now and grade it in the background. It goes
+    // straight into Your apps, so leaving this screen still leaves a row
+    // with progress (and later the grade) on the dashboard.
+    const id = store.startDirectCheck(name, site);
+    addToMyApps(id, name.trim(), site);
+    setPhase({ kind: 'check', id });
   };
 
   const addToMyApps = (id: string, appName: string, site: string, grade?: string) => {
@@ -117,7 +121,15 @@ export default function DirectCheckScreen(): React.JSX.Element {
         style={styles.primaryAction}
       />
     ) : (
-      <Text style={styles.following}>✓ In your apps</Text>
+      <View style={styles.followingRow}>
+        <Text style={styles.following}>✓ In your apps</Text>
+        <Button
+          compact
+          variant="quiet"
+          label="Remove from your apps"
+          onPress={() => store.unfollowService(`direct:${id}`)}
+        />
+      </View>
     );
 
   /** Shown the moment a check starts; the grade fills in when it's done. */
@@ -139,7 +151,7 @@ export default function DirectCheckScreen(): React.JSX.Element {
           <View style={styles.progressText}>
             <Text style={styles.progressTitle}>Reading the policies and grading…</Text>
             <Text style={styles.meta}>
-              Usually 1–2 minutes. You can leave this screen; it keeps going and your apps list updates when it's done.
+              Usually 1–2 minutes. You can leave this screen: it keeps going, and the grade appears on Your apps when it's done.
             </Text>
           </View>
         </View>
@@ -408,6 +420,12 @@ const useStyles = makeStyles(({ c }) => ({
   following: {
     ...type.bodySmBold,
     color: c.ink,
+  },
+  followingRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: space[3],
+    justifyContent: 'space-between',
     marginTop: space[4],
   },
   form: {
