@@ -33,12 +33,12 @@ Running list of open problems. Add new ones as they're found; when one is fixed,
   palette.
 
 ## Fixed
-- 2026-11-22 (uncommitted): ToS;DR lookup missed other spellings ("duck duck go"); it now also
+- 2026-11-22 `12c5748`: ToS;DR lookup missed other spellings ("duck duck go"); it now also
   searches the website and the name without spaces, preferring services that list the site.
-- 2026-11-22 (uncommitted): sites that block our server (duckduckgo.com from Render) now fall
+- 2026-11-22 `12c5748`: sites that block our server (duckduckgo.com from Render) now fall
   back to the Wayback Machine's latest copy, labelled as archived; failures record a reason
   ("HTTP 403", "timeout") in the response and server log; the "blocked" message no longer
-  says the policy wasn't found. Verify on Render after deploy.
+  says the policy wasn't found. Verified on Render: DuckDuckGo reads via the archive.
 - 2026-11-22 `4dc7e73`: checks you didn't add had no way back to the result; new checks now go
   straight into Your apps.
 - 2026-11-22 `c4a1011`: page finder picked blogs, warranty PDFs and JavaScript-only stubs.
