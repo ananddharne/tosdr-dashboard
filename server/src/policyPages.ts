@@ -31,7 +31,25 @@ const MIN_TEXT = 400; // wait-for-render threshold
 const MIN_POLICY_CHARS = 2500;
 const UA = 'Mozilla/5.0 (compatible; ToSDR-Dashboard-DirectCheck/0.2)';
 
-const WELL_KNOWN_PATHS = ['/privacy', '/privacy-policy', '/terms', '/terms-of-service', '/legal/privacy', '/legal/terms'];
+// Guessed when the homepage has no usable links (e.g. a footer drawn by
+// JavaScript). Ranked with discovered links, so misses only cost a 404.
+const WELL_KNOWN_PATHS = [
+  '/privacy',
+  '/privacy-policy',
+  '/privacypolicy',
+  '/privacy-notice',
+  '/terms',
+  '/terms-of-service',
+  '/terms-of-use',
+  '/legal/privacy',
+  '/legal/privacy-policy',
+  '/legal/terms',
+  '/pages/privacypolicy', // e.g. Flipkart
+  '/pages/privacy-policy',
+  '/pages/terms',
+  '/policies/privacy-policy', // Shopify stores
+  '/policies/terms-of-service',
+];
 const POLICY_LINK_RE = /privacy|terms|legal|datenschutz|conditions|cookie/i;
 
 export interface PolicyPage {
@@ -276,7 +294,7 @@ export async function readPolicyPages(siteInput: string): Promise<PolicyPagesRes
   // 2. Candidate policy pages, ranked, fetched plain.
   const discovered = homeHtml ? policyLinksFromHtml(homeHtml, siteUrl) : [];
   const wellKnown = WELL_KNOWN_PATHS.map((p) => ({ url: `${siteUrl}${p}`, label: '' }));
-  const candidates = rankCandidates([...discovered, ...wellKnown], siteUrl).slice(0, 10);
+  const candidates = rankCandidates([...discovered, ...wellKnown], siteUrl).slice(0, 18);
   const found: FoundPage[] = [];
   const seenPrints = new Set<string>([fingerprint(homeText)]);
   await Promise.all(
@@ -300,7 +318,8 @@ export async function readPolicyPages(siteInput: string): Promise<PolicyPagesRes
     pages: PolicyPage[],
     extra: Partial<PolicyPagesResult> & { rendered: boolean },
   ): PolicyPagesResult => {
-    if (failures.length > 0) {
+    // Guessed paths 404 all the time; only log when nothing was readable.
+    if (pages.length === 0 && failures.length > 0) {
       console.warn(`Unreadable on ${siteUrl}: ${failures.map((f) => `${f.url} (${f.error})`).join(', ')}`);
     }
     return {
@@ -414,7 +433,7 @@ export async function readArchivedPolicyPages(
   const home = await fetchSnapshot(siteUrl).catch(() => null);
   const discovered = home ? policyLinksFromHtml(home.html, siteUrl) : [];
   const wellKnown = WELL_KNOWN_PATHS.map((p) => ({ url: `${siteUrl}${p}`, label: '' }));
-  const candidates = rankCandidates([...discovered, ...wellKnown], siteUrl).slice(0, 6);
+  const candidates = rankCandidates([...discovered, ...wellKnown], siteUrl).slice(0, 8);
   const found: (FoundPage & { takenAt: string })[] = [];
   const seen = new Set<string>([fingerprint(home ? htmlToText(home.html) : '')]);
   await Promise.all(
@@ -486,11 +505,13 @@ async function getBrowser(): Promise<Browser | null> {
  * with analytics beacons never go idle, so that wait always times out.
  */
 async function loadRendered(page: import('playwright-core').Page, url: string) {
-  const res = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 15000 });
+  // 'commit' + our own wait: heavy homepages (Flipkart) never reach
+  // DOMContentLoaded within the limit on a small server.
+  const res = await page.goto(url, { waitUntil: 'commit', timeout: 30000 });
   await page
-    .waitForFunction((min) => (document.body?.innerText ?? '').trim().length > min, MIN_TEXT, { timeout: 8000 })
+    .waitForFunction((min) => (document.body?.innerText ?? '').trim().length > min, MIN_TEXT, { timeout: 20000 })
     .catch(() => undefined);
-  await page.waitForTimeout(500); // let late sections finish drawing
+  await page.waitForTimeout(1000); // let late sections (footers) finish drawing
   return res;
 }
 

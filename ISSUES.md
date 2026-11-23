@@ -6,6 +6,9 @@ Running list of open problems. Add new ones as they're found; when one is fixed,
 ## Open
 
 ### Direct check
+- **Unreachable sites get the "refused" message** (2026-11-22). A site that doesn't exist (DNS
+  failure) is reported as "refused our server's requests". Tell "couldn't reach" apart from
+  "refused" using the recorded failure reason.
 - **Page finder misses some policies** (2026-11-22): Reddit (policy is on redditinc.com, other
   domains aren't followed), Spotify and Garmin (short hub pages that link to the real policy),
   LibraryThing (no policy found).
@@ -21,9 +24,9 @@ Running list of open problems. Add new ones as they're found; when one is fixed,
 - **Saved apps live in one browser** (localStorage): nothing syncs across devices or people.
 
 ### UI
-- **Possible right-edge cut-off on wide windows** (2026-11-22). In a user screenshot, "Remove
-  from your apps" and the "Try again" button ran past the right edge. Not yet reproduced; may be
-  screenshot cropping.
+- **Possible right-edge cut-off on wide windows** (2026-11-22). In two user screenshots, "Remove
+  from your apps" and "Try again" ran past the right edge. Not reproduced at 1400px (page width
+  equals window, 16px margins both sides); both screenshots look cropped on the left too.
 
 ### Ops and cost
 - **No spend cap** on the Gemini key yet. Set a budget in Google Cloud billing.
@@ -33,6 +36,10 @@ Running list of open problems. Add new ones as they're found; when one is fixed,
   palette.
 
 ## Fixed
+- 2026-11-22 (uncommitted): Flipkart's policies weren't found: its footer links are drawn by
+  JavaScript, the standard guessed paths 404, and headless Chrome timed out on the heavy
+  homepage. Added more guessed paths (/pages/privacypolicy, /pages/terms, Shopify's
+  /policies/…, /privacypolicy, /privacy-notice, /terms-of-use…) and a 30s render wait.
 - 2026-11-22 `647f33d`: apps ToS;DR lists without a grade (N/A, e.g. Flipkart) were treated
   as "already rated", with no way to grade them. Now offers "Check it directly"; graded matches
   also get "Not the right app? Check it directly".
