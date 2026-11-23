@@ -18,11 +18,15 @@ type Route = RouteProp<RootStackParamList, 'DirectCheck'>;
 type Phase =
   | { kind: 'form' }
   | { kind: 'searching' }
-  | { kind: 'rated'; results: TosdrSearchService[] }
+  | { kind: 'rated'; results: TosdrSearchService[]; site: string }
   | { kind: 'check'; id: string } // a running or finished direct check
   | { kind: 'error'; message: string };
 
 const bareSite = (url: string) => url.replace(/^https?:\/\//, '');
+
+/** True when none of the ToS;DR matches has a letter grade (all "N/A"). */
+const isUngraded = (results: TosdrSearchService[]) =>
+  results.every((r) => !['A', 'B', 'C', 'D', 'E'].includes(r.rating.toUpperCase()));
 
 /** "https://www.Example.com/path" → "example.com". */
 const hostOf = (url: string) =>
@@ -119,12 +123,16 @@ export default function DirectCheckScreen(): React.JSX.Element {
     setPhase({ kind: 'searching' });
     const rated = await findOnTosdr(name, site);
     if (rated.length > 0) {
-      setPhase({ kind: 'rated', results: rated });
+      setPhase({ kind: 'rated', results: rated, site });
       return;
     }
-    // Not rated: show the app now and grade it in the background. It goes
-    // straight into Your apps, so leaving this screen still leaves a row
-    // with progress (and later the grade) on the dashboard.
+    runDirectCheck(site);
+  };
+
+  // Show the app now and grade it in the background. It goes straight into
+  // Your apps, so leaving this screen still leaves a row with progress (and
+  // later the grade) on the dashboard.
+  const runDirectCheck = (site: string) => {
     const id = store.startDirectCheck(name, site);
     addToMyApps(id, name.trim(), site);
     setPhase({ kind: 'check', id });
@@ -376,8 +384,26 @@ export default function DirectCheckScreen(): React.JSX.Element {
 
       {phase.kind === 'rated' && (
         <>
-          <SectionTitle>ToS;DR already rates this</SectionTitle>
-          <Text style={styles.hint}>Follow the rated version instead. It has a community grade and reviewed points.</Text>
+          {isUngraded(phase.results) ? (
+            <>
+              <SectionTitle>ToS;DR lists this but hasn't graded it</SectionTitle>
+              <Text style={styles.hint}>
+                There's no ToS;DR grade yet, so check it directly: we read its policies and estimate a grade.
+              </Text>
+              <Button
+                label="Check it directly"
+                onPress={() => runDirectCheck(phase.site)}
+                style={[styles.primaryAction, { marginBottom: space[4] }]}
+              />
+            </>
+          ) : (
+            <>
+              <SectionTitle>ToS;DR already rates this</SectionTitle>
+              <Text style={styles.hint}>
+                Follow the rated version instead. It has a community grade and reviewed points.
+              </Text>
+            </>
+          )}
           <View style={styles.ratedList}>
             {phase.results.map((service, i) => {
               const following = store.isFollowing(service.id);
@@ -416,6 +442,13 @@ export default function DirectCheckScreen(): React.JSX.Element {
             })}
           </View>
           <View style={styles.buttonRow}>
+            {!isUngraded(phase.results) && (
+              <Button
+                label="Not the right app? Check it directly"
+                variant="quiet"
+                onPress={() => runDirectCheck(phase.site)}
+              />
+            )}
             <Button label="Check a different app" variant="secondary" onPress={() => setPhase({ kind: 'form' })} />
             <Button label="Back to your apps" variant="quiet" onPress={() => navigation.navigate('Dashboard')} />
           </View>
