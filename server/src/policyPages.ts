@@ -46,6 +46,11 @@ export interface PolicyPagesResult {
   rendered: boolean;
   homepageHtml?: string;
   reason?: 'blocked' | 'no-policy-found' | 'js-only-no-browser';
+  // Why each failed URL failed ("HTTP 403", "timeout"…), for diagnosis.
+  failures: { url: string; error: string }[];
+  // Set when the live site refused us and the pages came from the
+  // Wayback Machine instead: the newest snapshot's date (ISO).
+  archivedAt?: string;
 }
 
 export function normalizeSite(input: string): string {
@@ -245,9 +250,17 @@ function fingerprint(text: string): string {
   return text.replace(/\s+/g, ' ').slice(0, 3000);
 }
 
+function errorText(err: unknown): string {
+  if (err instanceof Error) {
+    return err.name === 'AbortError' ? 'timeout' : err.message.slice(0, 120);
+  }
+  return 'failed';
+}
+
 export async function readPolicyPages(siteInput: string): Promise<PolicyPagesResult> {
   const siteUrl = normalizeSite(siteInput);
-  const failedUrls: string[] = [];
+  const failures: { url: string; error: string }[] = [];
+  const fail = (url: string, err: unknown) => failures.push({ url, error: errorText(err) });
 
   // 1. Homepage, plain.
   let homeHtml = '';
@@ -256,8 +269,8 @@ export async function readPolicyPages(siteInput: string): Promise<PolicyPagesRes
     const home = await plainFetch(siteUrl);
     homeHtml = home.html;
     homeText = htmlToText(home.html);
-  } catch {
-    failedUrls.push(siteUrl);
+  } catch (err) {
+    fail(siteUrl, err);
   }
 
   // 2. Candidate policy pages, ranked, fetched plain.
@@ -277,44 +290,154 @@ export async function readPolicyPages(siteInput: string): Promise<PolicyPagesRes
         }
         seenPrints.add(print);
         found.push({ url: c.url, text, kind: c.kind, score: c.score });
-      } catch {
-        failedUrls.push(c.url);
+      } catch (err) {
+        fail(c.url, err);
       }
     }),
   );
 
+  const done = (
+    pages: PolicyPage[],
+    extra: Partial<PolicyPagesResult> & { rendered: boolean },
+  ): PolicyPagesResult => {
+    if (failures.length > 0) {
+      console.warn(`Unreadable on ${siteUrl}: ${failures.map((f) => `${f.url} (${f.error})`).join(', ')}`);
+    }
+    return {
+      siteUrl,
+      pages,
+      failedUrls: [...new Set(failures.map((f) => f.url))],
+      failures,
+      homepageHtml: homeHtml || undefined,
+      ...extra,
+    };
+  };
+
   // Done if plain fetching found the privacy policy itself.
   if (found.some((p) => p.kind === 'privacy')) {
-    return { siteUrl, pages: choosePages(found), failedUrls, rendered: false, homepageHtml: homeHtml || undefined };
+    return done(choosePages(found), { rendered: false });
   }
 
   // 3. No privacy policy yet (JavaScript-drawn pages): render with headless
   // Chrome, keeping whatever plain fetching did find.
   const rendered = await renderPolicyPages(siteUrl);
-  if (rendered === null) {
-    return {
-      siteUrl,
-      pages: choosePages(found),
-      failedUrls,
-      rendered: false,
-      homepageHtml: homeHtml || undefined,
-      reason: found.length > 0 ? undefined : homeHtml ? 'js-only-no-browser' : 'blocked',
-    };
-  }
   const merged = [...found];
-  for (const page of rendered.pages) {
-    if (!merged.some((p) => fingerprint(p.text) === fingerprint(page.text))) {
-      merged.push(page);
+  if (rendered) {
+    failures.push(...rendered.failures);
+    for (const page of rendered.pages) {
+      if (!merged.some((p) => fingerprint(p.text) === fingerprint(page.text))) {
+        merged.push(page);
+      }
     }
   }
   const pages = choosePages(merged);
+  if (pages.length > 0) {
+    return done(pages, { rendered: rendered !== null, homepageHtml: homeHtml || rendered?.homepageHtml });
+  }
+
+  // 4. Nothing readable. If the site refused us outright (even its homepage
+  // failed), read the Wayback Machine's latest copies instead. Quotes then
+  // come, word for word, from that snapshot, and the result says so.
+  const refused = homeHtml === '';
+  if (refused) {
+    const archived = await readArchivedPolicyPages(siteUrl).catch(() => null);
+    if (archived && archived.pages.length > 0) {
+      return done(archived.pages, {
+        rendered: false,
+        archivedAt: archived.archivedAt,
+        homepageHtml: archived.homepageHtml,
+      });
+    }
+  }
+  return done([], {
+    rendered: rendered !== null,
+    reason: refused ? 'blocked' : rendered === null ? 'js-only-no-browser' : 'no-policy-found',
+  });
+}
+
+// --- Wayback Machine fallback -----------------------------------------------
+//
+// For sites that refuse requests from our server (many block cloud-provider
+// addresses). archive.org's availability API names the newest snapshot of a
+// URL; the `id_` form of a snapshot URL serves the page exactly as captured,
+// without the archive's toolbar and with the original links.
+
+const ARCHIVE_TIMEOUT_MS = 25000;
+
+interface Snapshot {
+  rawUrl: string; // the captured page itself (id_)
+  viewUrl: string; // the normal archive page, for people to open
+  takenAt: string; // ISO timestamp
+}
+
+async function findSnapshot(url: string): Promise<Snapshot | null> {
+  const api = `https://archive.org/wayback/available?url=${encodeURIComponent(url.replace(/^https?:\/\//, ''))}`;
+  const res = await fetch(api, { headers: { 'User-Agent': UA }, signal: AbortSignal.timeout(ARCHIVE_TIMEOUT_MS) });
+  if (!res.ok) {
+    return null;
+  }
+  const data = (await res.json()) as {
+    archived_snapshots?: { closest?: { available?: boolean; url?: string; timestamp?: string; status?: string } };
+  };
+  const snap = data.archived_snapshots?.closest;
+  if (!snap?.available || !snap.url || !snap.timestamp || (snap.status && snap.status !== '200')) {
+    return null;
+  }
+  const viewUrl = snap.url.replace(/^http:/, 'https:');
+  const t = snap.timestamp;
   return {
-    siteUrl,
+    rawUrl: viewUrl.replace(`/web/${t}/`, `/web/${t}id_/`),
+    viewUrl,
+    takenAt: `${t.slice(0, 4)}-${t.slice(4, 6)}-${t.slice(6, 8)}T${t.slice(8, 10)}:${t.slice(10, 12)}:${t.slice(12, 14)}Z`,
+  };
+}
+
+async function fetchSnapshot(url: string): Promise<{ html: string; snap: Snapshot } | null> {
+  const snap = await findSnapshot(url);
+  if (!snap) {
+    return null;
+  }
+  const res = await fetch(snap.rawUrl, {
+    headers: { Accept: 'text/html', 'User-Agent': UA },
+    redirect: 'follow',
+    signal: AbortSignal.timeout(ARCHIVE_TIMEOUT_MS),
+  });
+  if (!res.ok) {
+    return null;
+  }
+  return { html: await res.text(), snap };
+}
+
+export async function readArchivedPolicyPages(
+  siteUrl: string,
+): Promise<{ pages: PolicyPage[]; archivedAt?: string; homepageHtml?: string }> {
+  const home = await fetchSnapshot(siteUrl).catch(() => null);
+  const discovered = home ? policyLinksFromHtml(home.html, siteUrl) : [];
+  const wellKnown = WELL_KNOWN_PATHS.map((p) => ({ url: `${siteUrl}${p}`, label: '' }));
+  const candidates = rankCandidates([...discovered, ...wellKnown], siteUrl).slice(0, 6);
+  const found: (FoundPage & { takenAt: string })[] = [];
+  const seen = new Set<string>([fingerprint(home ? htmlToText(home.html) : '')]);
+  await Promise.all(
+    candidates.map(async (c) => {
+      const got = await fetchSnapshot(c.url).catch(() => null);
+      if (!got) {
+        return;
+      }
+      const text = htmlToText(got.html);
+      const print = fingerprint(text);
+      if (!looksLikePolicy(text) || seen.has(print)) {
+        return;
+      }
+      seen.add(print);
+      found.push({ url: got.snap.viewUrl, text, kind: c.kind, score: c.score, takenAt: got.snap.takenAt });
+    }),
+  );
+  const pages = choosePages(found);
+  const used = found.filter((f) => pages.some((p) => p.url === f.url)).map((f) => f.takenAt);
+  return {
     pages,
-    failedUrls: [...failedUrls, ...rendered.failedUrls],
-    rendered: true,
-    homepageHtml: homeHtml || rendered.homepageHtml,
-    reason: pages.length === 0 ? 'no-policy-found' : undefined,
+    archivedAt: used.sort().pop(),
+    homepageHtml: home?.html,
   };
 }
 
@@ -373,7 +496,7 @@ async function loadRendered(page: import('playwright-core').Page, url: string) {
 
 async function renderPolicyPages(
   siteUrl: string,
-): Promise<{ pages: FoundPage[]; failedUrls: string[]; homepageHtml?: string } | null> {
+): Promise<{ pages: FoundPage[]; failures: { url: string; error: string }[]; homepageHtml?: string } | null> {
   const browser = await getBrowser();
   if (!browser) {
     return null;
@@ -385,7 +508,7 @@ async function renderPolicyPages(
     return kind === 'image' || kind === 'media' || kind === 'font' ? route.abort() : route.continue();
   });
   const page = await context.newPage();
-  const failedUrls: string[] = [];
+  const failures: { url: string; error: string }[] = [];
   const pages: FoundPage[] = [];
   try {
     let homepageHtml: string | undefined;
@@ -403,8 +526,8 @@ async function renderPolicyPages(
         },
         POLICY_LINK_RE.source,
       );
-    } catch {
-      failedUrls.push(siteUrl);
+    } catch (err) {
+      failures.push({ url: siteUrl, error: `rendered: ${errorText(err)}` });
     }
 
     const candidates = rankCandidates(
@@ -420,7 +543,7 @@ async function renderPolicyPages(
       try {
         const res = await loadRendered(page, url);
         if (res && !res.ok()) {
-          failedUrls.push(url);
+          failures.push({ url, error: `rendered: HTTP ${res.status()}` });
           continue;
         }
         const text = (await page.evaluate(() => document.body?.innerText ?? '')).trim();
@@ -430,11 +553,11 @@ async function renderPolicyPages(
         }
         seen.add(print);
         pages.push({ url: page.url(), text, kind, score });
-      } catch {
-        failedUrls.push(url);
+      } catch (err) {
+        failures.push({ url, error: `rendered: ${errorText(err)}` });
       }
     }
-    return { pages, failedUrls, homepageHtml };
+    return { pages, failures, homepageHtml };
   } finally {
     await context.close();
   }

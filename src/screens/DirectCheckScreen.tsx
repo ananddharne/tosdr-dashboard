@@ -24,6 +24,51 @@ type Phase =
 
 const bareSite = (url: string) => url.replace(/^https?:\/\//, '');
 
+/** "https://www.Example.com/path" → "example.com". */
+const hostOf = (url: string) =>
+  url
+    .trim()
+    .toLowerCase()
+    .replace(/^https?:\/\//, '')
+    .replace(/^www\./, '')
+    .replace(/[/?#].*$/, '');
+
+/**
+ * ToS;DR's search only matches close spellings ("duck duck go" finds
+ * nothing, "duckduckgo" finds DuckDuckGo). Try the typed name, the website,
+ * and the name without spaces; a service whose listed sites include the
+ * website wins over loose name matches. Stops at the first site match, so
+ * usually 1–2 requests. Search errors never block the direct check.
+ */
+async function findOnTosdr(name: string, site: string): Promise<TosdrSearchService[]> {
+  const host = hostOf(site);
+  const queries = [...new Set([name.trim(), host, name.replace(/\s+/g, ''), host.split('.')[0]])].filter(
+    (q) => q.length >= 2,
+  );
+  let nameMatches: TosdrSearchService[] = [];
+  for (const query of queries) {
+    let results: TosdrSearchService[];
+    try {
+      results = await searchServices(query);
+    } catch {
+      continue;
+    }
+    const sameSite = results.filter((r) =>
+      r.urls.some((u) => {
+        const h = hostOf(u);
+        return h === host || h.endsWith(`.${host}`) || host.endsWith(`.${h}`);
+      }),
+    );
+    if (sameSite.length > 0) {
+      return sameSite;
+    }
+    if (query === name.trim() && results.length > 0) {
+      nameMatches = results; // keep the old behaviour as a fallback
+    }
+  }
+  return nameMatches;
+}
+
 export default function DirectCheckScreen(): React.JSX.Element {
   const navigation = useNavigation<Nav>();
   const route = useRoute<Route>();
@@ -70,16 +115,12 @@ export default function DirectCheckScreen(): React.JSX.Element {
       return;
     }
     // Always check ToS;DR first. If it rates the service, offer the rated
-    // record instead of duplicating it with a direct check.
+    // record instead of a (paid) direct check.
     setPhase({ kind: 'searching' });
-    try {
-      const results = await searchServices(name);
-      if (results.length > 0) {
-        setPhase({ kind: 'rated', results });
-        return;
-      }
-    } catch {
-      // Search failure must not block the direct check; fall through.
+    const rated = await findOnTosdr(name, site);
+    if (rated.length > 0) {
+      setPhase({ kind: 'rated', results: rated });
+      return;
     }
     // Not rated: show the app now and grade it in the background. It goes
     // straight into Your apps, so leaving this screen still leaves a row
@@ -167,6 +208,11 @@ export default function DirectCheckScreen(): React.JSX.Element {
         result.siteUrl,
         result.iconUrl,
         <GradeBadge grade={result.rating && result.rating.grade !== 'N/A' ? result.rating.grade : '?'} large />,
+      )}
+      {result.archivedAt && (
+        <Note title="Read from an archived copy">
+          {`${bareSite(result.siteUrl)} refused our server, so we read the Wayback Machine's copy of its policies from ${new Date(result.archivedAt).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })}. Quotes are word for word from that copy; the live pages may have changed since.`}
+        </Note>
       )}
       <Text style={styles.resultMeta}>
         {`${result.rating ? 'Estimated grade · not reviewed by ToS;DR' : 'Unrated · direct check'} · ${new Date(result.fetchedAt).toLocaleDateString(undefined, {

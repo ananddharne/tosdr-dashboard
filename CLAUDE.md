@@ -4,6 +4,9 @@ Expo (React Native + web) app showing ToS;DR privacy grades for the apps you use
 Node server for chat and "Direct check" (grading apps ToS;DR hasn't reviewed). **This repo
 is public**: never commit keys, `.env`, or personal details.
 
+Known problems are tracked in `ISSUES.md`. Read it before working on related code, add new
+issues there, and move fixed ones to its Fixed section.
+
 ## Layout
 - `App.tsx`: navigation stack; web header back button.
 - `src/screens/`: one file per screen. `DirectCheckScreen` is the main flow.

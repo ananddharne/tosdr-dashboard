@@ -39,6 +39,9 @@ export interface DirectCheckResult {
   findings: DirectCheckFinding[];
   notStatedTopics: string[];
   iconUrl?: string; // icon the homepage declares; absent on older saved checks
+  // Set when the site refused our server and the pages were read from the
+  // Wayback Machine instead: the snapshot date (ISO).
+  archivedAt?: string;
   // Estimated ToS;DR-style grade (server/src/caseRating.ts): model-matched
   // ToS;DR cases, each backed by a quote verified against the page text,
   // graded with ToS;DR's own formula. Absent when the server has no model
@@ -225,6 +228,7 @@ interface PolicyPage {
 
 interface PolicyPages {
   cachedAt?: string; // set when the server returned an earlier result
+  archivedAt?: string;
   pages: PolicyPage[];
   rating?: DirectCheckRating;
   ratingError?: 'not-configured' | 'failed';
@@ -300,6 +304,7 @@ async function pagesFromServer(siteUrl: string, serviceName: string, fresh: bool
     rating?: DirectCheckRating;
     ratingError?: 'not-configured' | 'failed';
     cachedAt?: string;
+    archivedAt?: string;
   };
   if (!res.ok) {
     throw new DirectCheckError(data.error ?? `The app server couldn't check this site (error ${res.status}).`);
@@ -308,7 +313,7 @@ async function pagesFromServer(siteUrl: string, serviceName: string, fresh: bool
   if (!data.pages || data.pages.length === 0) {
     throw new DirectCheckError(
       data.reason === 'blocked'
-        ? `${host} refused our request. Some sites block automated readers; open its privacy policy in your browser instead.`
+        ? `${host} refused our server's requests (some sites block automated readers), and there's no archived copy of its policies we could use. Open its privacy policy in your browser instead.`
         : data.reason === 'js-only-no-browser'
           ? `${host} draws its pages with JavaScript, and the app server has no Chrome to render them. Install Google Chrome on the server machine and try again.`
           : `We couldn't find a privacy policy or terms page on ${host}. Check the website address, or open its policy in your browser.`,
@@ -321,6 +326,7 @@ async function pagesFromServer(siteUrl: string, serviceName: string, fresh: bool
     rating: data.rating,
     ratingError: data.ratingError,
     cachedAt: data.cachedAt,
+    archivedAt: data.archivedAt,
   };
 }
 
@@ -384,7 +390,7 @@ export async function runDirectCheck(
 ): Promise<DirectCheckResult> {
   const siteUrl = normalizeSiteUrl(siteUrlInput);
   // fresh: skip the server's shared cache and grade the site again.
-  const { pages, failedUrls, homepageHtml, rating, ratingError, cachedAt } = isBackendConfigured()
+  const { pages, failedUrls, homepageHtml, rating, ratingError, cachedAt, archivedAt } = isBackendConfigured()
     ? await pagesFromServer(siteUrl, name.trim(), opts.fresh === true)
     : await pagesFromDevice(siteUrl);
 
@@ -430,5 +436,6 @@ export async function runDirectCheck(
     iconUrl,
     rating,
     ratingError,
+    archivedAt,
   };
 }
