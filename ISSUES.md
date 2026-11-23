@@ -33,7 +33,7 @@ Running list of open problems. Add new ones as they're found; when one is fixed,
   palette.
 
 ## Fixed
-- 2026-11-22 (uncommitted): apps ToS;DR lists without a grade (N/A, e.g. Flipkart) were treated
+- 2026-11-22 `647f33d`: apps ToS;DR lists without a grade (N/A, e.g. Flipkart) were treated
   as "already rated", with no way to grade them. Now offers "Check it directly"; graded matches
   also get "Not the right app? Check it directly".
 - 2026-11-22 `12c5748`: ToS;DR lookup missed other spellings ("duck duck go"); it now also
