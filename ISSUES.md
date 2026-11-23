@@ -36,7 +36,7 @@ Running list of open problems. Add new ones as they're found; when one is fixed,
   palette.
 
 ## Fixed
-- 2026-11-22 (uncommitted): Flipkart's policies weren't found: its footer links are drawn by
+- 2026-11-22 `537f31b`: Flipkart's policies weren't found: its footer links are drawn by
   JavaScript, the standard guessed paths 404, and headless Chrome timed out on the heavy
   homepage. Added more guessed paths (/pages/privacypolicy, /pages/terms, Shopify's
   /policies/…, /privacypolicy, /privacy-notice, /terms-of-use…) and a 30s render wait.
