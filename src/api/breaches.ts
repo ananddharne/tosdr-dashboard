@@ -2,10 +2,13 @@ import { Platform } from 'react-native';
 
 // Data breaches from Have I Been Pwned (https://haveibeenpwned.com).
 //
-//   GET https://haveibeenpwned.com/api/v3/breaches?domain=<domain>
+//   GET https://haveibeenpwned.com/api/v3/breaches
 //
-// Public, free, no API key, and CORS-enabled, so the app calls it directly.
-// Matching is by exact domain, so we try each of an app's domains.
+// The app downloads HIBP's full public list once (about 1,050 breaches,
+// ~220 KB compressed; free, no API key, CORS-enabled) and matches locally:
+//   - exact: the breach's domain is the app's domain or a subdomain of it;
+//   - brand: same brand on another site (dominos.com -> dominos.co.in), which
+//     may be a separate company such as a local franchise, so it is labelled.
 //
 // Attribution (required): HIBP breach data is licensed under CC BY 4.0.
 // Credit it wherever breaches are shown and on the About screen.
@@ -17,7 +20,6 @@ import { Platform } from 'react-native';
 export const HIBP_SITE = 'https://haveibeenpwned.com';
 const API = `${HIBP_SITE}/api/v3/breaches`;
 const TIMEOUT_MS = 12000;
-const MAX_DOMAINS = 4;
 const TTL_MS = 6 * 60 * 60 * 1000;
 
 interface HibpBreach {
@@ -54,6 +56,8 @@ export interface Breach {
   verified: boolean;
   /** HIBP's page for this breach. */
   url: string;
+  /** exact: this app's site; brand: another site of the same brand. */
+  match: 'exact' | 'brand';
 }
 
 export interface BreachReport {
@@ -85,69 +89,97 @@ const stripHtml = (html: string) =>
     .replace(/\s+/g, ' ')
     .trim();
 
-async function fetchDomain(domain: string): Promise<HibpBreach[]> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
-  try {
-    // HIBP asks clients for a User-Agent; browsers don't let pages set one,
-    // but they send their own.
-    const headers: Record<string, string> = { Accept: 'application/json' };
-    if (Platform.OS !== 'web') {
-      headers['User-Agent'] = 'tosdr-dashboard';
-    }
-    const res = await fetch(`${API}?domain=${encodeURIComponent(domain)}`, { headers, signal: controller.signal });
-    if (!res.ok) {
-      throw new Error(`HIBP ${res.status}`);
-    }
-    const data: unknown = await res.json();
-    return Array.isArray(data) ? (data as HibpBreach[]) : [];
-  } finally {
-    clearTimeout(timer);
+// "dominos.co.in" -> "dominos", "pizza.dominos.be" -> "dominos".
+const SECOND_LEVEL = new Set(['co', 'com', 'net', 'org', 'gov', 'ac', 'edu', 'ne', 'or']);
+function brandOf(domain: string): string {
+  const parts = domain.split('.');
+  if (parts.length >= 3 && SECOND_LEVEL.has(parts[parts.length - 2]) && parts[parts.length - 1].length === 2) {
+    return parts[parts.length - 3];
   }
+  return parts.length >= 2 ? parts[parts.length - 2] : parts[0];
+}
+// Short brands ("x", "ok") would match unrelated sites.
+const MIN_BRAND = 4;
+
+let all: { at: number; list: Promise<HibpBreach[]> } | null = null;
+
+function fetchAll(): Promise<HibpBreach[]> {
+  if (all && Date.now() - all.at < TTL_MS) {
+    return all.list;
+  }
+  const list = (async () => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+    try {
+      // HIBP asks clients for a User-Agent; browsers don't let pages set one,
+      // but they send their own.
+      const headers: Record<string, string> = { Accept: 'application/json' };
+      if (Platform.OS !== 'web') {
+        headers['User-Agent'] = 'tosdr-dashboard';
+      }
+      const res = await fetch(API, { headers, signal: controller.signal });
+      if (!res.ok) {
+        throw new Error(`HIBP ${res.status}`);
+      }
+      const data: unknown = await res.json();
+      return Array.isArray(data) ? (data as HibpBreach[]) : [];
+    } finally {
+      clearTimeout(timer);
+    }
+  })();
+  all = { at: Date.now(), list };
+  // Don't keep a failure cached.
+  list.catch(() => {
+    all = null;
+  });
+  return list;
 }
 
-const cache = new Map<string, { at: number; report: Promise<BreachReport> }>();
+function matchOf(breachDomain: string, domains: string[]): Breach['match'] | null {
+  const bd = breachDomain.toLowerCase().replace(/^www\./, '');
+  if (bd === '') {
+    return null;
+  }
+  if (domains.some((d) => bd === d || bd.endsWith(`.${d}`))) {
+    return 'exact';
+  }
+  const brand = brandOf(bd);
+  return brand.length >= MIN_BRAND && domains.some((d) => brandOf(d) === brand) ? 'brand' : null;
+}
 
 /**
- * Breaches listed for any of `urls` (an app's domains), newest first.
- * Rejects if HIBP can't be reached, so callers can tell "none" from "unknown".
+ * Breaches for any of `urls` (an app's domains), this app's own first, then
+ * newest first. Rejects if HIBP can't be reached, so callers can tell "none"
+ * from "unknown".
  */
-export function fetchBreaches(urls: string[]): Promise<BreachReport> {
-  const domains = [...new Set(urls.map(domainOf).filter((d): d is string => d !== null))].slice(0, MAX_DOMAINS);
-  const key = domains.join(',');
-  const hit = cache.get(key);
-  if (hit && Date.now() - hit.at < TTL_MS) {
-    return hit.report;
-  }
-  const report = (async (): Promise<BreachReport> => {
-    const lists = await Promise.all(domains.map(fetchDomain));
-    const seen = new Set<string>();
-    const breaches: Breach[] = [];
-    for (const b of lists.flat()) {
-      if (seen.has(b.Name) || b.IsFabricated || b.IsSpamList || b.IsRetired || b.IsMalware || b.IsStealerLog) {
-        continue;
-      }
-      seen.add(b.Name);
-      breaches.push({
-        id: b.Name,
-        title: b.Title,
-        domain: b.Domain,
-        breachDate: b.BreachDate,
-        addedDate: b.AddedDate,
-        accounts: b.PwnCount,
-        dataClasses: b.DataClasses,
-        description: stripHtml(b.Description),
-        verified: b.IsVerified,
-        url: `${HIBP_SITE}/Breach/${encodeURIComponent(b.Name)}`,
-      });
+export async function fetchBreaches(urls: string[]): Promise<BreachReport> {
+  const domains = [...new Set(urls.map(domainOf).filter((d): d is string => d !== null))];
+  const list = await fetchAll();
+  const breaches: Breach[] = [];
+  for (const b of list) {
+    if (b.IsFabricated || b.IsSpamList || b.IsRetired || b.IsMalware || b.IsStealerLog) {
+      continue;
     }
-    breaches.sort((a, b) => b.breachDate.localeCompare(a.breachDate));
-    return { domains, breaches, accounts: breaches.reduce((n, b) => n + b.accounts, 0) };
-  })();
-  cache.set(key, { at: Date.now(), report });
-  // Don't keep a failure cached.
-  report.catch(() => cache.delete(key));
-  return report;
+    const match = matchOf(b.Domain, domains);
+    if (match === null) {
+      continue;
+    }
+    breaches.push({
+      id: b.Name,
+      title: b.Title,
+      domain: b.Domain,
+      breachDate: b.BreachDate,
+      addedDate: b.AddedDate,
+      accounts: b.PwnCount,
+      dataClasses: b.DataClasses,
+      description: stripHtml(b.Description),
+      verified: b.IsVerified,
+      url: `${HIBP_SITE}/Breach/${encodeURIComponent(b.Name)}`,
+      match,
+    });
+  }
+  breaches.sort((a, b) => (a.match === b.match ? 0 : a.match === 'exact' ? -1 : 1) || b.breachDate.localeCompare(a.breachDate));
+  return { domains, breaches, accounts: breaches.reduce((n, b) => n + b.accounts, 0) };
 }
 
 /** 509458528 -> "509M", 6682453 -> "6.7M", 77267 -> "77K". */

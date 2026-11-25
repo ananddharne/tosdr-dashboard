@@ -60,7 +60,7 @@ function BreachRow({ breach }: { breach: Breach }): React.JSX.Element {
           <Text style={styles.rowCount}>{formatCount(breach.accounts)}</Text>
         </View>
         <Text style={styles.rowMeta}>
-          {`${monthYear(breach.breachDate)} · ${formatCount(breach.accounts)} accounts${breach.verified ? '' : ' · Unverified'}`}
+          {`${monthYear(breach.breachDate)} · ${formatCount(breach.accounts)} accounts${breach.verified ? '' : ' · Unverified'}${breach.match === 'brand' ? ` · ${breach.domain}` : ''}`}
         </Text>
         <Text style={styles.rowData} numberOfLines={open ? undefined : 2}>
           {severe.length > 0 && <Text style={styles.severe}>{severe.join(' · ')}</Text>}
@@ -108,7 +108,7 @@ export function BreachCard({ urls }: { urls: string[] }): React.JSX.Element | nu
           <>
             <Text style={styles.noneTitle}>No known breaches</Text>
             <Text style={styles.meta}>
-              {`Have I Been Pwned lists none for ${state.report.domains.join(', ')}. It only knows about breaches that became public.`}
+              {`Not in Have I Been Pwned's list for ${state.report.domains.join(', ')}. That list only has breaches whose data leaked publicly, so it misses many.`}
             </Text>
           </>
         )}
@@ -130,10 +130,17 @@ export function BreachCard({ urls }: { urls: string[] }): React.JSX.Element | nu
               <Text style={styles.summaryBad}>{`${formatCount(accounts)} accounts`}</Text>
               {' exposed'}
             </Text>
-            <Text style={styles.meta}>{`Most recent ${monthYear(breaches[0].breachDate)}`}</Text>
+            <Text style={styles.meta}>{`Most recent ${monthYear([...breaches].sort((a, b) => b.breachDate.localeCompare(a.breachDate))[0].breachDate)}`}</Text>
           </View>
         </View>
       </View>
+      {breaches.some((b) => b.match === 'brand') && (
+        <Text style={[styles.meta, styles.brandNote]}>
+          {breaches.every((b) => b.match === 'brand')
+            ? `None listed for ${state.report.domains.join(', ')} itself. These are other sites under the same name, which may be run by a separate company such as a local franchise.`
+            : 'Some of these are other sites under the same name, which may be run by a separate company such as a local franchise.'}
+        </Text>
+      )}
       {shown.map((b) => (
         <BreachRow key={b.id} breach={b} />
       ))}
@@ -174,11 +181,11 @@ export function BreachedAppsCard({ apps, checked }: { apps: BreachedApp[]; check
             {` leaked in ${breached.reduce((n, a) => n + a.report.breaches.length, 0)} known breaches`}
           </Text>
         ) : (
-          <Text style={styles.meta}>No known breaches for your apps on Have I Been Pwned.</Text>
+          <Text style={styles.meta}>None of your apps are in Have I Been Pwned's list, which misses many breaches.</Text>
         )}
       </View>
       {breached.map((a) => {
-        const latest = a.report.breaches[0];
+        const latest = [...a.report.breaches].sort((x, y) => y.breachDate.localeCompare(x.breachDate))[0];
         return (
           <Pressable
             key={a.key}
@@ -208,6 +215,10 @@ export function BreachedAppsCard({ apps, checked }: { apps: BreachedApp[]; check
 }
 
 const useStyles = makeStyles(({ c }) => ({
+  brandNote: {
+    paddingBottom: space[3],
+    paddingHorizontal: space[4],
+  },
   appRow: {
     alignItems: 'center',
     backgroundColor: c.surface,

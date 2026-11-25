@@ -25,6 +25,10 @@ Running list of open problems. Add new ones as they're found; when one is fixed,
   which fails the grade. Needs a retry with backoff, or a catalog copy bundled with the server.
 
 ### Data and state
+- **Breach coverage is partial** (2026-11-24). Have I Been Pwned only lists breaches whose data
+  leaked publicly (~1,050), so big disclosed breaches are missing (Equifax, Marriott, Capital One,
+  T-Mobile, 23andMe). A second source from disclosures (state AG notices, HHS portal, news) would
+  fill the gap.
 - **Server cache is memory-only**: lost whenever Render restarts the server (free plan: after
   ~15 idle minutes), so repeat checks of the same site often cost again.
 - **A page reload loses running checks**: the entry shows "Check didn't finish · tap to retry".

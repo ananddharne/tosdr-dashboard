@@ -33,8 +33,9 @@ export default function AboutScreen(): React.JSX.Element {
       </View>
 
       <Text style={styles.body}>
-        Data breaches come from Have I Been Pwned by Troy Hunt, licensed under CC BY 4.0. It lists breaches that became
-        public; an app with none listed may still have had one.
+        Data breaches come from Have I Been Pwned by Troy Hunt, licensed under CC BY 4.0. It lists breaches whose data
+        leaked publicly, so it misses many (Equifax and Marriott, for example); an app with none listed may still
+        have had one.
       </Text>
       <View style={styles.links}>
         <Link label={`${HIBP_SITE.replace(/^https?:\/\//, '')} ↗`} onPress={() => void Linking.openURL(HIBP_SITE)} />
