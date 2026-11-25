@@ -1,5 +1,5 @@
-import React, { useMemo, useState } from 'react';
-import { Linking, Pressable, Text, View, type StyleProp, type ViewStyle } from 'react-native';
+import React, { useMemo, useRef, useState } from 'react';
+import { Animated, Easing, Linking, PanResponder, Platform, Pressable, Text, View, type StyleProp, type ViewStyle } from 'react-native';
 import Svg, { Circle, Path } from 'react-native-svg';
 import { makeStyles, radius, size, space, type, useTheme, type Palette } from '../theme';
 import { EXPOSURE_ITEMS, findingMatches, redFlagsFor, type ExposureItem } from '../utils/exposure';
@@ -146,6 +146,76 @@ export function Pager({ index, count, onChange }: { index: number; count: number
         <Chevron dir="right" color={c.ink} px={16} />
       </Pressable>
     </View>
+  );
+}
+
+/**
+ * Paged content you can swipe left or right (touch, or drag with a mouse),
+ * with the ‹ • • • › pager underneath. Vertical drags still scroll the page,
+ * and taps still reach what's inside.
+ */
+export function SwipePages({
+  index,
+  count,
+  onChange,
+  children,
+}: {
+  index: number;
+  count: number;
+  onChange: (i: number) => void;
+  children: React.ReactNode;
+}): React.JSX.Element {
+  const tx = useRef(new Animated.Value(0)).current;
+  const opacity = useRef(new Animated.Value(1)).current;
+  const width = useRef(320);
+  const native = Platform.OS !== 'web';
+  // The responder is created once, so read the latest props through a ref.
+  const latest = useRef({ index, count, onChange });
+  latest.current = { index, count, onChange };
+
+  const turn = (dir: 1 | -1) => {
+    const { index: i, count: n, onChange: change } = latest.current;
+    const out = -dir * width.current * 0.35;
+    Animated.parallel([
+      Animated.timing(tx, { toValue: out, duration: 140, easing: Easing.in(Easing.quad), useNativeDriver: native }),
+      Animated.timing(opacity, { toValue: 0, duration: 140, useNativeDriver: native }),
+    ]).start(() => {
+      change((i + dir + n) % n);
+      tx.setValue(-out);
+      Animated.parallel([
+        Animated.timing(tx, { toValue: 0, duration: 200, easing: Easing.out(Easing.cubic), useNativeDriver: native }),
+        Animated.timing(opacity, { toValue: 1, duration: 200, useNativeDriver: native }),
+      ]).start();
+    });
+  };
+
+  // Claim only clearly sideways drags, so scrolling and taps still work.
+  const sideways = (dx: number, dy: number) => latest.current.count > 1 && Math.abs(dx) > 12 && Math.abs(dx) > Math.abs(dy) * 1.5;
+
+  const responder = useRef(
+    PanResponder.create({
+      onMoveShouldSetPanResponder: (_, g) => sideways(g.dx, g.dy),
+      onMoveShouldSetPanResponderCapture: (_, g) => sideways(g.dx, g.dy),
+      onPanResponderTerminationRequest: () => false,
+      onPanResponderMove: (_, g) => tx.setValue(g.dx * 0.6),
+      onPanResponderRelease: (_, g) => {
+        if (Math.abs(g.dx) > Math.min(80, width.current * 0.2) || Math.abs(g.vx) > 0.4) {
+          turn(g.dx < 0 ? 1 : -1);
+        } else {
+          Animated.spring(tx, { toValue: 0, useNativeDriver: native, bounciness: 6 }).start();
+        }
+      },
+      onPanResponderTerminate: () => Animated.spring(tx, { toValue: 0, useNativeDriver: native }).start(),
+    }),
+  ).current;
+
+  return (
+    <>
+      <View onLayout={(e) => (width.current = e.nativeEvent.layout.width)} style={{ overflow: 'hidden' }} {...responder.panHandlers}>
+        <Animated.View style={{ transform: [{ translateX: tx }], opacity }}>{children}</Animated.View>
+      </View>
+      <Pager index={index} count={count} onChange={onChange} />
+    </>
   );
 }
 
@@ -430,8 +500,9 @@ export function Breakdown({ findings, afterTopics }: { findings: Finding[]; afte
       {topics.length > 0 && (
         <Card>
           <CardTitle>Red flags by topic</CardTitle>
-          <BarGrid>
-            {topics.slice(page * PER_PAGE, page * PER_PAGE + PER_PAGE).map(({ item, n }) => (
+          <SwipePages index={page} count={pages} onChange={setPage}>
+            <BarGrid>
+              {topics.slice(page * PER_PAGE, page * PER_PAGE + PER_PAGE).map(({ item, n }) => (
               <BarCell
                 key={item.id}
                 label={item.label}
@@ -441,8 +512,8 @@ export function Breakdown({ findings, afterTopics }: { findings: Finding[]; afte
                 onPress={() => setTopic((t) => (t === item.id ? null : item.id))}
               />
             ))}
-          </BarGrid>
-          <Pager index={page} count={pages} onChange={setPage} />
+            </BarGrid>
+          </SwipePages>
           <Text style={styles.cardHint}>Tap a topic to see only those clauses.</Text>
         </Card>
       )}

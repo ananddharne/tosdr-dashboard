@@ -10,7 +10,7 @@ import { aiSummaryLine, deriveAiLens, gradeRank } from '../utils/grades';
 import { countByClass, findingsFromDirect, findingsFromTosdr, isRedFlag, type Finding } from '../utils/findings';
 import { EXPOSURE_GROUPS, redFlagsFor } from '../utils/exposure';
 import { Button, Switch, ThemeToggle, useGhostPress, useRowPress, webInteractive } from '../components/ui';
-import { AppGroup, AppRiskRow, BarCell, BarGrid, Card, CardTitle, Pager, RiskRing } from '../components/risk';
+import { AppGroup, AppRiskRow, BarCell, BarGrid, Card, CardTitle, RiskRing, SwipePages } from '../components/risk';
 import { logoForFollow } from '../utils/logos';
 import { fetchBreaches, type BreachReport } from '../api/breaches';
 import { BreachedAppsCard } from '../components/breaches';
@@ -263,6 +263,14 @@ export default function DashboardScreen(): React.JSX.Element {
           {loaded.length > 0 && (
             <Card>
               <CardTitle right={<Text style={styles.cardMeta}>{`of ${loaded.length} graded`}</Text>}>{group.title}</CardTitle>
+              <SwipePages
+                index={page}
+                count={EXPOSURE_GROUPS.length}
+                onChange={(i) => {
+                  setPage(i);
+                  setExposure(null);
+                }}
+              >
               <BarGrid>
                 {group.items.map((item) => {
                   const n = loaded.filter((a) => redFlagsFor(a.findings as Finding[], item).length > 0).length;
@@ -284,14 +292,7 @@ export default function DashboardScreen(): React.JSX.Element {
                   {selectedApps.length > 0 ? `${selected.label}: ${selectedApps.join(' · ')}` : `${selected.label}: none of your apps`}
                 </Text>
               )}
-              <Pager
-                index={page}
-                count={EXPOSURE_GROUPS.length}
-                onChange={(i) => {
-                  setPage(i);
-                  setExposure(null);
-                }}
-              />
+              </SwipePages>
             </Card>
           )}
 
