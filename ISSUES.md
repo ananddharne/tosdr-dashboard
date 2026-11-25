@@ -17,6 +17,13 @@ Running list of open problems. Add new ones as they're found; when one is fixed,
   Open decision: keep showing the letter, or show only the quoted cases.
 - **Slow**: a new check takes 1–2 minutes, plus up to a minute if the Render server was asleep.
 
+- **Intermittent "couldn't reach the server"** (2026-11-24). Render's free plan sleeps after ~15 idle
+  minutes; logs show 8 cold starts in 2 days. A request that arrives while it wakes can fail. The
+  app doesn't retry; it could ping `/health` and retry once the server is up.
+- **ToS;DR case catalog 429 after a cold start** (2026-11-23 log: "Rating failed: ToS;DR case
+  catalog 429"). A restart empties the in-memory catalog, and refetching it can be rate-limited,
+  which fails the grade. Needs a retry with backoff, or a catalog copy bundled with the server.
+
 ### Data and state
 - **Server cache is memory-only**: lost whenever Render restarts the server (free plan: after
   ~15 idle minutes), so repeat checks of the same site often cost again.

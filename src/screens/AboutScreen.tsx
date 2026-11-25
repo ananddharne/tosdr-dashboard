@@ -1,6 +1,7 @@
 import React from 'react';
 import { Linking, ScrollView, Text, View } from 'react-native';
 import { TOSDR_API_BASE, TOSDR_SITE } from '../api/tosdr';
+import { HIBP_SITE } from '../api/breaches';
 import { appInventory } from '../services/appInventory';
 import { Link, SectionTitle } from '../components/ui';
 import { makeStyles, space, type } from '../theme';
@@ -29,6 +30,14 @@ export default function AboutScreen(): React.JSX.Element {
       <View style={styles.links}>
         <Link label={`${TOSDR_SITE.replace(/^https?:\/\//, '')} ↗`} onPress={() => void Linking.openURL(TOSDR_SITE)} />
         <Link label={`${TOSDR_API_BASE.replace(/^https?:\/\//, '')} ↗`} onPress={() => void Linking.openURL(TOSDR_API_BASE)} />
+      </View>
+
+      <Text style={styles.body}>
+        Data breaches come from Have I Been Pwned by Troy Hunt, licensed under CC BY 4.0. It lists breaches that became
+        public; an app with none listed may still have had one.
+      </Text>
+      <View style={styles.links}>
+        <Link label={`${HIBP_SITE.replace(/^https?:\/\//, '')} ↗`} onPress={() => void Linking.openURL(HIBP_SITE)} />
       </View>
 
       <SectionTitle>Direct checks</SectionTitle>

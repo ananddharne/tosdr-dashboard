@@ -1,25 +1,19 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, FlatList, Platform, Pressable, RefreshControl, Text, View } from 'react-native';
+import { ActivityIndicator, Platform, Pressable, RefreshControl, ScrollView, Text, View } from 'react-native';
+import Svg, { Path } from 'react-native-svg';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
 import { useStore, followKey } from '../state/store';
 import { approvedPoints, type TosdrServiceDetail } from '../api/tosdr';
-import { CONCERNS } from '../utils/concerns';
 import { aiSummaryLine, deriveAiLens, gradeRank } from '../utils/grades';
-import {
-  Button,
-  Chip,
-  ChipRow,
-  SectionTitle,
-  ServiceRow,
-  Switch,
-  ThemeToggle,
-  useGhostPress,
-  useListItemStyle,
-  useRowPress,
-} from '../components/ui';
+import { countByClass, findingsFromDirect, findingsFromTosdr, isRedFlag, type Finding } from '../utils/findings';
+import { EXPOSURE_GROUPS, redFlagsFor } from '../utils/exposure';
+import { Button, Switch, ThemeToggle, useGhostPress, useRowPress, webInteractive } from '../components/ui';
+import { AppGroup, AppRiskRow, BarCell, BarGrid, Card, CardTitle, Pager, RiskRing } from '../components/risk';
 import { logoForFollow } from '../utils/logos';
+import { fetchBreaches, type BreachReport } from '../api/breaches';
+import { BreachedAppsCard } from '../components/breaches';
 import { hairline, makeStyles, radius, size, space, type, useTheme } from '../theme';
 import type { FollowedService } from '../services/storage';
 
@@ -30,12 +24,13 @@ export default function DashboardScreen(): React.JSX.Element {
   const store = useStore();
   const { c } = useTheme();
   const styles = useStyles();
-  const listItemStyle = useListItemStyle();
   const ghostPress = useGhostPress();
   const rowPress = useRowPress();
   const [details, setDetails] = useState<Record<number, TosdrServiceDetail>>({});
   const [refreshing, setRefreshing] = useState(false);
   const [lastRefresh, setLastRefresh] = useState<string | null>(null);
+  const [page, setPage] = useState(0);
+  const [exposure, setExposure] = useState<string | null>(null);
 
   useLayoutEffect(() => {
     navigation.setOptions({
@@ -43,13 +38,24 @@ export default function DashboardScreen(): React.JSX.Element {
         // On web the header adds no inset; match the content gutter.
         <View style={[styles.headerActions, Platform.OS === 'web' && { marginRight: space[4] }]}>
           <ThemeToggle />
+          <Pressable
+            onPress={() => navigation.navigate('AddApps')}
+            accessibilityRole="button"
+            accessibilityLabel="Add apps"
+            hitSlop={6}
+            style={(state) => [styles.addButton, webInteractive, state.pressed && styles.pressed]}
+          >
+            <Svg width={20} height={20} viewBox="0 0 24 24" fill="none" stroke={c.onTint} strokeWidth={2.4} strokeLinecap="round">
+              <Path d="M12 5v14M5 12h14" />
+            </Svg>
+          </Pressable>
           <Pressable onPress={() => navigation.navigate('About')} accessibilityRole="link" hitSlop={8} style={ghostPress}>
             <Text style={styles.navAction}>About</Text>
           </Pressable>
         </View>
       ),
     });
-  }, [navigation, styles, ghostPress]);
+  }, [navigation, styles, ghostPress, c]);
 
   const loadDetails = useCallback(async () => {
     for (const follow of store.follows) {
@@ -67,9 +73,75 @@ export default function DashboardScreen(): React.JSX.Element {
     void loadDetails();
   }, [loadDetails]);
 
-  const sorted = useMemo(() => {
-    return [...store.follows].sort((a, b) => gradeRank(a.rating) - gradeRank(b.rating));
-  }, [store.follows]);
+  // Each app's findings, once loaded: ToS;DR's approved points, or a
+  // direct check's verified quotes. Null while loading or when ungraded.
+  const findingsFor = useCallback(
+    (follow: FollowedService): Finding[] | null => {
+      if (follow.source === 'tosdr') {
+        const detail = follow.serviceId !== null ? details[follow.serviceId] : undefined;
+        return detail ? findingsFromTosdr(approvedPoints(detail)) : null;
+      }
+      const check = follow.directCheckId ? store.directChecks[follow.directCheckId] : undefined;
+      return check?.rating ? findingsFromDirect(check.rating) : null;
+    },
+    [details, store.directChecks],
+  );
+
+  const apps = useMemo(
+    () =>
+      [...store.follows]
+        .map((follow) => {
+          const findings = findingsFor(follow);
+          return { follow, findings, redFlags: findings ? findings.filter(isRedFlag).length : undefined };
+        })
+        // Worst grade first, then most red flags.
+        .sort((a, b) => gradeRank(a.follow.rating) - gradeRank(b.follow.rating) || (b.redFlags ?? 0) - (a.redFlags ?? 0)),
+    [store.follows, findingsFor],
+  );
+
+  // Each app's domains: ToS;DR's list once its detail loads, or the checked site.
+  const urlsFor = useCallback(
+    (follow: FollowedService): string[] | null => {
+      if (follow.source === 'tosdr') {
+        const detail = follow.serviceId !== null ? details[follow.serviceId] : undefined;
+        return detail ? detail.urls : null;
+      }
+      const check = follow.directCheckId ? store.directChecks[follow.directCheckId] : undefined;
+      return check ? [check.siteUrl] : null;
+    },
+    [details, store.directChecks],
+  );
+
+  const [breaches, setBreaches] = useState<Record<string, BreachReport>>({});
+  useEffect(() => {
+    for (const follow of store.follows) {
+      const key = followKey(follow);
+      const urls = urlsFor(follow);
+      if (urls !== null && urls.length > 0 && breaches[key] === undefined) {
+        // Failures just leave the app out of the breach card.
+        fetchBreaches(urls).then(
+          (report) => setBreaches((prev) => ({ ...prev, [key]: report })),
+          () => undefined,
+        );
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [store.follows, urlsFor]);
+
+  const loaded = apps.filter((a) => a.findings !== null);
+  const allFindings = useMemo(() => loaded.flatMap((a) => a.findings as Finding[]), [loaded]);
+  const totals = countByClass(allFindings);
+  const maxRedFlags = Math.max(1, ...apps.map((a) => a.redFlags ?? 0));
+
+  const isPending = (f: FollowedService) =>
+    f.directCheckId !== undefined && store.pendingChecks[f.directCheckId] !== undefined && !store.pendingChecks[f.directCheckId].error;
+  const letter = (f: FollowedService) => f.rating.toUpperCase();
+  const risky = apps.filter((a) => ['D', 'E'].includes(letter(a.follow)));
+  const better = apps.filter((a) => ['A', 'B', 'C'].includes(letter(a.follow)));
+  const ungraded = apps.filter((a) => !['A', 'B', 'C', 'D', 'E'].includes(letter(a.follow)));
+  const graded = risky.length + better.length;
+
+  const level = risky.length === 0 ? 'Low exposure' : risky.length * 2 >= graded ? 'High exposure' : 'Some exposure';
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
@@ -80,7 +152,7 @@ export default function DashboardScreen(): React.JSX.Element {
     setRefreshing(false);
   }, [store.refreshAll]);
 
-  const summaryFor = (follow: FollowedService): string => {
+  const statusFor = (follow: FollowedService): string => {
     if (follow.source === 'direct') {
       const pending = follow.directCheckId ? store.pendingChecks[follow.directCheckId] : undefined;
       if (pending) {
@@ -99,6 +171,28 @@ export default function DashboardScreen(): React.JSX.Element {
     return aiSummaryLine(deriveAiLens(approvedPoints(detail)));
   };
 
+  const open = (follow: FollowedService) => {
+    if (follow.source === 'tosdr' && follow.serviceId !== null) {
+      navigation.navigate('ServiceDetail', { serviceId: follow.serviceId, name: follow.name });
+    } else if (follow.directCheckId) {
+      navigation.navigate('DirectCheck', { directCheckId: follow.directCheckId });
+    }
+  };
+
+  const renderApp = ({ follow, redFlags }: (typeof apps)[number]) => (
+    <AppRiskRow
+      key={followKey(follow)}
+      name={follow.name}
+      logoUri={logoForFollow(follow, store.directChecks)}
+      grade={follow.rating === 'UNRATED' ? '?' : follow.rating}
+      pending={isPending(follow)}
+      redFlags={redFlags}
+      maxRedFlags={maxRedFlags}
+      summary={statusFor(follow)}
+      onPress={() => open(follow)}
+    />
+  );
+
   if (!store.ready) {
     return (
       <View style={styles.center}>
@@ -107,102 +201,144 @@ export default function DashboardScreen(): React.JSX.Element {
     );
   }
 
+  const group = EXPOSURE_GROUPS[page];
+  const selected = group.items.find((i) => i.id === exposure);
+  const selectedApps = selected
+    ? loaded.filter((a) => redFlagsFor(a.findings as Finding[], selected).length > 0).map((a) => a.follow.name)
+    : [];
+
   return (
-    <FlatList
+    <ScrollView
       style={styles.screen}
-      data={sorted}
-      keyExtractor={(item) => followKey(item)}
+      contentContainerStyle={styles.content}
       refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={c.tint} />}
-      ListHeaderComponent={
-        <View style={styles.header}>
-          <Text style={styles.title} accessibilityRole="header">
-            Your apps
-          </Text>
-          <Text style={styles.subtitle}>Worst grade first. Pull down to check for changes.</Text>
-          {lastRefresh !== null && <Text style={styles.refreshNote}>{lastRefresh}</Text>}
+    >
+      <View style={styles.header}>
+        <Text style={styles.title} accessibilityRole="header">
+          Your apps
+        </Text>
+        <Text style={styles.subtitle}>Pull down to check for changes.</Text>
+        {lastRefresh !== null && <Text style={styles.refreshNote}>{lastRefresh}</Text>}
+      </View>
+
+      {apps.length === 0 ? (
+        <Card style={styles.empty}>
+          <Text style={styles.emptyTitle}>No apps yet</Text>
+          <Text style={styles.emptyText}>Add the apps you use and see what their terms let them do to you.</Text>
+          <Button label="Add your first app" onPress={() => navigation.navigate('AddApps')} />
+        </Card>
+      ) : (
+        <>
+          <Card style={styles.heroCard}>
+            <RiskRing counts={totals} />
+            <View style={styles.heroText}>
+              <Text style={styles.heroKicker}>{level}</Text>
+              <Text style={styles.heroHeadline}>
+                {`${risky.length} of your ${apps.length} app${apps.length === 1 ? '' : 's'} ${apps.length === 1 ? 'is' : 'are'} rated D or E`}
+              </Text>
+              <Text style={styles.heroCounts}>
+                <Text style={styles.heroBad}>{totals.bad + totals.blocker}</Text>
+                {' red flags · '}
+                <Text style={styles.heroBad}>{totals.blocker}</Text>
+                {' blockers · '}
+                <Text style={styles.heroGood}>{totals.good}</Text>
+                {' good'}
+              </Text>
+            </View>
+          </Card>
+
+          <BreachedAppsCard
+            checked={store.follows.filter((f) => breaches[followKey(f)] !== undefined).length}
+            apps={store.follows
+              .filter((f) => breaches[followKey(f)] !== undefined)
+              .map((f) => ({
+                key: followKey(f),
+                name: f.name,
+                logoUri: logoForFollow(f, store.directChecks),
+                report: breaches[followKey(f)],
+                onPress: () => open(f),
+              }))}
+          />
+
+          {loaded.length > 0 && (
+            <Card>
+              <CardTitle right={<Text style={styles.cardMeta}>{`of ${loaded.length} graded`}</Text>}>{group.title}</CardTitle>
+              <BarGrid>
+                {group.items.map((item) => {
+                  const n = loaded.filter((a) => redFlagsFor(a.findings as Finding[], item).length > 0).length;
+                  return (
+                    <BarCell
+                      key={item.id}
+                      label={item.label}
+                      value={`${n}/${loaded.length}`}
+                      fraction={n / loaded.length}
+                      muted={n === 0}
+                      selected={exposure === item.id}
+                      onPress={() => setExposure((e) => (e === item.id ? null : item.id))}
+                    />
+                  );
+                })}
+              </BarGrid>
+              {selected !== undefined && (
+                <Text style={styles.selectedApps}>
+                  {selectedApps.length > 0 ? `${selected.label}: ${selectedApps.join(' · ')}` : `${selected.label}: none of your apps`}
+                </Text>
+              )}
+              <Pager
+                index={page}
+                count={EXPOSURE_GROUPS.length}
+                onChange={(i) => {
+                  setPage(i);
+                  setExposure(null);
+                }}
+              />
+            </Card>
+          )}
+
+          {risky.length > 0 && (
+            <AppGroup title="Rated D or E" count={risky.length} defaultOpen>
+              {risky.map(renderApp)}
+            </AppGroup>
+          )}
+          {ungraded.length > 0 && (
+            <AppGroup title="Not graded or checking" count={ungraded.length} defaultOpen={ungraded.some((a) => isPending(a.follow)) || risky.length === 0}>
+              {ungraded.map(renderApp)}
+            </AppGroup>
+          )}
+          {better.length > 0 && (
+            <AppGroup title="Rated A to C" count={better.length} defaultOpen={risky.length === 0}>
+              {better.map(renderApp)}
+            </AppGroup>
+          )}
 
           <View style={styles.actions}>
             <Button label="Add apps" onPress={() => navigation.navigate('AddApps')} style={styles.grow} />
-            <Button
-              label="Ask a question"
-              variant="secondary"
-              onPress={() => navigation.navigate('Chat', {})}
-              style={styles.grow}
-            />
+            <Button label="Ask a question" variant="secondary" onPress={() => navigation.navigate('Chat', {})} style={styles.grow} />
           </View>
-
-          <SectionTitle>Concerns</SectionTitle>
-          <ChipRow>
-            {CONCERNS.map((concern) => (
-              <Chip
-                key={concern.id}
-                label={concern.label}
-                selected={store.concerns.includes(concern.id)}
-                onPress={() => store.toggleConcern(concern.id)}
-              />
-            ))}
-          </ChipRow>
-          <Text style={styles.hint}>Nothing selected shows every concern.</Text>
-
-          <View style={styles.group}>
-            <View style={[styles.groupRow, styles.groupRowSeparator]}>
-              <Text style={styles.groupLabel}>Change alerts</Text>
-              <Switch
-                value={store.settings.alertsEnabled}
-                onValueChange={store.setAlertsEnabled}
-                accessibilityLabel="Change alerts"
-              />
-            </View>
-            <Pressable
-              onPress={() => navigation.navigate('ChangeFeed')}
-              accessibilityRole="button"
-              android_ripple={rowPress.android_ripple}
-              style={(state) => [styles.groupRowPress, rowPress.stateStyle(state)]}
-            >
-              <View style={styles.groupRow}>
-                <Text style={styles.groupLabel}>Changes</Text>
-                <View style={styles.groupValue}>
-                  {store.unreadChanges > 0 && <Text style={styles.groupValueText}>{`${store.unreadChanges} new`}</Text>}
-                  <Text style={styles.chevron}>›</Text>
-                </View>
-              </View>
-            </Pressable>
-          </View>
-
-          {sorted.length > 0 && <SectionTitle>{`${sorted.length} app${sorted.length === 1 ? '' : 's'}`}</SectionTitle>}
-        </View>
-      }
-      ListEmptyComponent={
-        <View style={styles.empty}>
-          <Text style={styles.emptyTitle}>No apps yet</Text>
-          <Text style={styles.emptyText}>Add the apps you use and see what each one does with your data.</Text>
-          <Button label="Add your first app" onPress={() => navigation.navigate('AddApps')} />
-        </View>
-      }
-      renderItem={({ item, index }) => (
-        <ServiceRow
-          style={listItemStyle(index, sorted.length, true)}
-          separator={index < sorted.length - 1}
-          name={item.name}
-          logoUri={logoForFollow(item, store.directChecks)}
-          grade={item.rating === 'UNRATED' ? '?' : item.rating}
-          pending={
-            item.directCheckId !== undefined &&
-            store.pendingChecks[item.directCheckId] !== undefined &&
-            !store.pendingChecks[item.directCheckId].error
-          }
-          summary={summaryFor(item)}
-          onPress={() => {
-            if (item.source === 'tosdr' && item.serviceId !== null) {
-              navigation.navigate('ServiceDetail', { serviceId: item.serviceId, name: item.name });
-            } else if (item.directCheckId) {
-              navigation.navigate('DirectCheck', { directCheckId: item.directCheckId });
-            }
-          }}
-        />
+        </>
       )}
-      contentContainerStyle={styles.listContent}
-    />
+
+      <Card flush>
+        <View style={[styles.groupRow, styles.groupRowSeparator]}>
+          <Text style={styles.groupLabel}>Change alerts</Text>
+          <Switch value={store.settings.alertsEnabled} onValueChange={store.setAlertsEnabled} accessibilityLabel="Change alerts" />
+        </View>
+        <Pressable
+          onPress={() => navigation.navigate('ChangeFeed')}
+          accessibilityRole="button"
+          android_ripple={rowPress.android_ripple}
+          style={(state) => [styles.groupRowPress, rowPress.stateStyle(state)]}
+        >
+          <View style={styles.groupRow}>
+            <Text style={styles.groupLabel}>Changes</Text>
+            <View style={styles.groupValue}>
+              {store.unreadChanges > 0 && <Text style={styles.groupValueText}>{`${store.unreadChanges} new`}</Text>}
+              <Text style={styles.chevron}>›</Text>
+            </View>
+          </View>
+        </Pressable>
+      </Card>
+    </ScrollView>
   );
 }
 
@@ -212,10 +348,20 @@ const useStyles = makeStyles(({ c }) => ({
     flexDirection: 'row',
     gap: space[3] + 2,
   },
+  addButton: {
+    alignItems: 'center',
+    backgroundColor: c.tint,
+    borderRadius: radius.pill,
+    height: 36,
+    justifyContent: 'center',
+    width: 36,
+  },
+  pressed: {
+    opacity: 0.7,
+  },
   actions: {
     flexDirection: 'row',
     gap: space[3] - 2,
-    marginTop: space[4],
   },
   center: {
     alignItems: 'center',
@@ -223,17 +369,22 @@ const useStyles = makeStyles(({ c }) => ({
     flex: 1,
     justifyContent: 'center',
   },
+  cardMeta: {
+    ...type.footnote,
+    color: c.inkMuted,
+  },
   chevron: {
     color: c.inkFaint,
     fontSize: 24,
     lineHeight: 26,
   },
+  content: {
+    gap: space[3] + 2,
+    paddingBottom: space[8],
+    paddingHorizontal: space[3],
+  },
   empty: {
-    backgroundColor: c.surface,
-    borderRadius: radius.md,
-    gap: space[3],
-    marginHorizontal: space[4],
-    marginTop: space[7],
+    marginTop: space[4],
     padding: space[6],
   },
   emptyText: {
@@ -243,12 +394,6 @@ const useStyles = makeStyles(({ c }) => ({
   emptyTitle: {
     ...type.headline,
     color: c.ink,
-  },
-  group: {
-    backgroundColor: c.surface,
-    borderRadius: radius.md,
-    marginTop: space[7],
-    overflow: 'hidden',
   },
   groupLabel: {
     ...type.body,
@@ -283,17 +428,44 @@ const useStyles = makeStyles(({ c }) => ({
     flex: 1,
   },
   header: {
-    paddingBottom: space[1],
-    paddingHorizontal: space[4],
+    paddingHorizontal: space[1],
   },
-  hint: {
+  heroBad: {
+    color: c.badText,
+    fontFamily: type.bodySmBold.fontFamily,
+  },
+  heroCard: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: space[4],
+  },
+  heroCounts: {
     ...type.footnote,
     color: c.inkMuted,
-    marginLeft: space[4],
-    marginTop: space[2],
   },
-  listContent: {
-    paddingBottom: space[8],
+  heroGood: {
+    color: c.goodText,
+    fontFamily: type.bodySmBold.fontFamily,
+  },
+  heroHeadline: {
+    ...type.headline,
+    color: c.ink,
+    fontFamily: type.display.fontFamily,
+    fontSize: 18,
+    lineHeight: 23,
+  },
+  heroKicker: {
+    ...type.label,
+    color: c.badText,
+    fontFamily: type.bodySmBold.fontFamily,
+    fontSize: 11,
+    letterSpacing: 1.1,
+    lineHeight: 15,
+  },
+  heroText: {
+    flex: 1,
+    gap: space[2],
+    minWidth: 0,
   },
   navAction: {
     ...type.body,
@@ -302,10 +474,14 @@ const useStyles = makeStyles(({ c }) => ({
   refreshNote: {
     ...type.footnote,
     color: c.inkMuted,
-    marginTop: space[2],
+    marginTop: space[1],
   },
   screen: {
     backgroundColor: c.ground,
+  },
+  selectedApps: {
+    ...type.footnote,
+    color: c.ink,
   },
   subtitle: {
     ...type.bodySm,

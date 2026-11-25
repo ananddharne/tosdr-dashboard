@@ -9,6 +9,9 @@ import { normalizeSiteUrl, type DirectCheckResult } from '../api/directCheck';
 import { useStore } from '../state/store';
 import { Button, ClauseQuote, GradeBadge, Link, Note, SectionTitle, TextField } from '../components/ui';
 import { ServiceLogo } from '../components/ServiceLogo';
+import { Breakdown, RiskHero } from '../components/risk';
+import { BreachCard } from '../components/breaches';
+import { findingsFromDirect } from '../utils/findings';
 import { tosdrLogoUrl } from '../utils/logos';
 import { makeStyles, radius, space, type, useTheme } from '../theme';
 
@@ -215,7 +218,7 @@ export default function DirectCheckScreen(): React.JSX.Element {
         result.name,
         result.siteUrl,
         result.iconUrl,
-        <GradeBadge grade={result.rating && result.rating.grade !== 'N/A' ? result.rating.grade : '?'} large />,
+        result.rating ? undefined : <GradeBadge grade="?" large />,
       )}
       {result.archivedAt && (
         <Note title="Read from an archived copy">
@@ -232,33 +235,25 @@ export default function DirectCheckScreen(): React.JSX.Element {
 
       {renderFollowButton(result.id, result.name, result.siteUrl, result.rating?.grade)}
 
+      {!result.rating && <BreachCard urls={[result.siteUrl]} />}
+
       {result.rating && (
-        <>
-          <SectionTitle>{`ToS;DR cases found (${result.rating.points.length})`}</SectionTitle>
-          <Text style={styles.hint}>
-            {`${result.rating.counts.good} good · ${result.rating.counts.bad} bad · ${result.rating.counts.blocker} blocker · ${result.rating.counts.neutral} neutral. Graded with ToS;DR's formula; neutral cases don't count.`}
-          </Text>
-          {result.rating.points.length === 0 && (
+        <View style={styles.breakdown}>
+          <RiskHero grade={result.rating.grade} findings={findingsFromDirect(result.rating)} estimated />
+          <BreachCard urls={[result.siteUrl]} />
+          {result.rating.points.length === 0 ? (
             <Note>No ToS;DR cases could be matched to the pages we read, so there's no grade.</Note>
+          ) : (
+            <Breakdown findings={findingsFromDirect(result.rating)} />
           )}
-          {result.rating.points.map((point) => (
-            <ClauseQuote
-              key={point.caseId}
-              classification={point.classification}
-              title={point.caseTitle}
-              body={point.quote}
-              verbatim
-              sourceLabel={bareSite(point.sourceUrl)}
-              onPressSource={() => void Linking.openURL(point.sourceUrl)}
-            />
-          ))}
+          <Text style={styles.hint}>Graded with ToS;DR's formula; neutral cases don't count. Every quote is word for word from the page.</Text>
           {result.rating.incomplete && (
             <Note>The AI service was busy, so some ToS;DR cases weren't checked. Run the check again later for a fuller grade.</Note>
           )}
           {result.rating.textTruncated && (
             <Note>These policies are long, so only the first part of each page was checked. The grade may miss cases.</Note>
           )}
-        </>
+        </View>
       )}
 
       {!result.rating && result.ratingError === 'failed' && (
@@ -468,6 +463,10 @@ export default function DirectCheckScreen(): React.JSX.Element {
 }
 
 const useStyles = makeStyles(({ c }) => ({
+  breakdown: {
+    gap: space[3] + 2,
+    marginTop: space[6],
+  },
   buttonRow: {
     flexDirection: 'row',
     flexWrap: 'wrap',

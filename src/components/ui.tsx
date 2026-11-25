@@ -426,7 +426,7 @@ export function ThemeToggle(): React.JSX.Element {
 }
 
 /** Same footprint as a small GradeBadge, with a spinner inside. */
-function PendingBadge(): React.JSX.Element {
+export function PendingBadge(): React.JSX.Element {
   const { c } = useTheme();
   const styles = useStyles();
   return (
@@ -593,7 +593,7 @@ const useStyles = makeStyles(({ c }) => ({
     borderRadius: radius.pill,
     elevation: 2,
     height: 27,
-    shadowColor: '#000000',
+    shadowColor: c.shadow,
     shadowOffset: { width: 0, height: 3 },
     shadowOpacity: 0.15,
     shadowRadius: 8,
